@@ -71,5 +71,10 @@ crates.io is planned next. Prefer reading the Hanami v3.0 guides
 
 ## CI
 
-There is no hosted CI yet; `just check` is the required gate before any
+Hosted CI runs the engine and site checks behind the org-required
+`conclusion` aggregate (`.github/workflows/ci.yml`, repo-owned);
+`just check` is the local equivalent and the required gate before any
 change lands.
+
+<!-- fleet:block commit-and-pr-conventions -->
+<!-- fleet:end -->

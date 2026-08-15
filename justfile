@@ -96,3 +96,15 @@ check:
         failed=1
     fi
     exit $failed
+
+# fleet:block install-hooks
+# fleet:end
+
+# fleet:block npm-policy
+# fleet:end
+
+# fleet:block audit
+# fleet:end
+
+# fleet:block pinprick-audit
+# fleet:end
