@@ -6,9 +6,10 @@ end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-[*.{css,erb,html,js,json,rb,yaml,yml}]
+[*.{astro,css,html,js,json,jsx,mjs,rb,tf,ts,tsx,yaml,yml}]
 indent_style = space
 indent_size = 2
 
-[*.tsv]
-trim_trailing_whitespace = false
+[*.{rs,swift,toml}]
+indent_style = space
+indent_size = 4

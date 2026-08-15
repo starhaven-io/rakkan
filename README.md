@@ -1,6 +1,10 @@
 # Rakkan
 
 <!-- fleet:block badges -->
+
+[![CI](https://github.com/starhaven-io/rakkan/actions/workflows/ci.yml/badge.svg)](https://github.com/starhaven-io/rakkan/actions/workflows/ci.yml)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/License-AGPL--3.0--only-blue.svg)](LICENSE)
+
 <!-- fleet:end -->
 
 A public tracker for trusted publishing adoption across package registries:
