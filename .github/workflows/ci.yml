@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+defaults:
+  run:
+    shell: bash -xeuo pipefail {0}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  engine:
+    name: Engine
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Prepare databases
+        run: |
+          cp .env.example .env
+          bundle exec hanami db prepare
+
+      - name: RSpec
+        run: bundle exec rspec
+
+      - name: RuboCop
+        run: bundle exec rubocop
+
+  site:
+    name: Site
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install dependencies
+        working-directory: site
+        # Fail if an unreviewed dependency install script is introduced.
+        run: npm ci --strict-allow-scripts
+
+      - name: Test
+        working-directory: site
+        run: npm run test
+
+      - name: Build
+        working-directory: site
+        run: npm run build
+
+      - name: Deploy dry-run
+        working-directory: site
+        run: npm run deploy:dry
+        env:
+          WRANGLER_SEND_METRICS: "false"
+
+  # The org's Require Conclusion ruleset needs an always-reporting aggregate
+  # check with exactly this name.
+  conclusion:
+    name: conclusion
+    needs: [engine, site]
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    if: always()
+    steps:
+      - name: Result
+        env:
+          ENGINE_RESULT: ${{ needs.engine.result }}
+          SITE_RESULT: ${{ needs.site.result }}
+        run: |
+          test "${ENGINE_RESULT}" = "success"
+          test "${SITE_RESULT}" = "success"

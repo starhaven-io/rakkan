@@ -1,0 +1,7 @@
+{
+  "source": "rubygems.org weekly public PostgreSQL dump",
+  "dump_key": "production/public_postgresql/2026.08.10.21.21.01/public_postgresql.tar",
+  "dump_taken_at": "2026-08-10T21:21:01Z",
+  "built_by": "research/build_seed.rb",
+  "tracked_set": "top 1000 gems by total downloads (gem_downloads version_id=0 rows)"
+}

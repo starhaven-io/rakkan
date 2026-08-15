@@ -1,0 +1,158 @@
+# Data sources for trusted publishing adoption
+
+Investigated 2026-08-14. Sample responses live in
+`research/samples/`; the scripts behind the dump-derived numbers live in
+`research/`. Registry state referenced throughout is the weekly dump dated
+2026-08-10 plus live API probes on 2026-08-14. Evidence caveat: the probe
+script retained response bodies only, so saved samples do not preserve
+status codes or headers (statuses were observed at probe time), and the raw
+dump is not retained; dump-derived claims are reproducible from a fresh
+dump via the scripts, not from the committed artifacts alone.
+
+## Summary and recommendation
+
+The trusted publishing / provenance signal for RubyGems is **available from
+public JSON APIs and from the weekly data dump**. No HTML scraping is needed
+for any part of the pipeline. The recommended ingestion path is:
+
+1. **Backfill + tracked set (weekly):** the official PostgreSQL dump. One
+   ~650 MB download per week yields download counts (top-N definition), all
+   versions, and the complete `attestations` table (11,926 rows covering
+   11,920 distinct attested versions registry-wide as of 2026-08-10). COPY
+   blocks are plain TSV, so a streaming parser suffices; no Postgres server
+   required.
+2. **Freshness (daily):** `GET /api/v1/timeframe_versions.json` (7-day
+   window, paginated) to discover new versions of tracked gems, then
+   `GET /api/v1/attestations/<name>-<version>.json` per new version. Well
+   within documented rate limits for a top-1000 tracked set.
+3. **Identity enrichment:** parse the Fulcio X.509 certificate inside each
+   sigstore bundle (stdlib OpenSSL; extension OIDs `1.3.6.1.4.1.57264.1.*`)
+   to get issuer, source repo, workflow, commit, and run URL.
+
+Headline baseline from the 2026-08-10 dump: **96 of the top 1,000 gems by
+downloads (9.6%) have at least one attested version**; 664 of their 104,587
+indexed version rows are attested.
+
+## RubyGems.org
+
+### v1 gems / versions APIs: no signal
+
+`/api/v1/gems/<name>.json` and `/api/v1/versions/<name>.json` (and the v2
+per-version endpoint) return gemspec-derived data only. Verified on
+`sigstore`, `rubocop`, `rack`: no provenance, attestation, or pushed-by
+fields. Samples: `v1_gems_*.json`, `v1_versions_sigstore.json`,
+`v2_version_sigstore-0.2.3.json`.
+
+### v1 attestations API: the per-version signal
+
+`GET /api/v1/attestations/<name>-<version>.json` is documented in the
+official API guide and returns an array of sigstore bundles
+(`application/vnd.dev.sigstore.bundle.v0.3+json`, `messageSignature` form;
+a signed gem digest with a Fulcio certificate, not a DSSE/SLSA statement).
+Unattested versions return `[]` with HTTP 200 (clean semantics, no 404
+handling). Samples: `v1_attestations_sigstore-0.2.3.json` (populated),
+`v1_attestations_rack-3.2.7.json` and `v1_attestations_rubocop-1.89.0.json`
+(both empty; adoption is genuinely partial even among flagship gems).
+
+The publisher identity is inside the certificate (`verificationMaterial.
+certificate.rawBytes`, base64 DER). Decoding with stdlib OpenSSL yields, for
+sigstore 0.2.3: issuer `https://token.actions.githubusercontent.com`, repo
+`sigstore/sigstore-ruby`, workflow `release.yml@refs/tags/v0.2.3`, commit
+SHA, run URL, `github-hosted` runner. These become real schema columns.
+
+### Weekly PostgreSQL dump: the bulk signal and the top-N source
+
+`rubygems.org/pages/data` → weekly sanitized dumps in the public
+`rubygems-dumps` S3 bucket (`production/public_postgresql/<date>/
+public_postgresql.tar`, ~650 MB; listing samples saved). The tar holds one
+plain-format `PostgreSQL.sql.gz`; COPY blocks are TSV, parsed by streaming
+(`research/extract_dump.rb`) without a Postgres install.
+
+Tables present: `rubygems`, `versions`, `dependencies`, `gem_downloads`,
+`linksets`, `deletions`, and, decisively, **`attestations`
+(id, version_id, body, media_type, …)** with the full sigstore bundle in
+`body`. So the dump carries the complete signal in bulk.
+
+- **Top-N by downloads:** `gem_downloads` has per-version rows plus a
+  `version_id=0` total row per gem. Sanity-checked on rack (total
+  1,324,158,241 ≈ sum of per-version rows). `research/top_gems.rb` produces
+  the top-1000 list; top of the list (bundler, aws-sdk-core, …) is plausible.
+- **Sanitization caveat:** `users` and `api_keys` tables are absent, so
+  `versions.pusher_id` / `versions.pusher_api_key_id` are dangling IDs. All
+  664 attested tracked versions have `pusher_id NULL + pusher_api_key_id
+  set`, consistent with trusted-publisher pushes, but the dump alone cannot
+  attribute human pushers, and there is no `oidc_*` table to distinguish a
+  plain-API-key push from a trusted-publisher push for unattested versions.
+
+### timeframe_versions: the incremental feed
+
+`GET /api/v1/timeframe_versions.json?from=…&to=…` (ISO8601, max 7-day span,
+paginated) returns full version objects in ascending created_at order;
+oldest first, pages disjoint (verified live with page=1 vs page=2 samples).
+This is the polling source for "new versions since the last run"; the
+ascending order is what lets an interrupted run park its cursor at the last
+entry seen.
+
+### HTML gem pages: richer, but not needed
+
+The gem page (sample: `html_gem_page_sigstore.html`) shows "Pushed by"
+(human account for rack; `GitHub Actions repo@workflow` for sigstore) and a
+Provenance panel. Two things are HTML-only: the human pusher attribution and
+the trusted-publisher badge for **unattested** TP pushes. The provenance
+panel content itself is reconstructible from the attestations API. Decision:
+**do not scrape**; track attestation presence as the (lower-bound) adoption
+signal and note the nuance in the UI copy.
+
+### Rate limits
+
+Documented: 10 req/s for API and site, `Retry-After` on 429, stricter
+rack-attack limits on auth-ish endpoints (not relevant here). Client policy
+adopted: identifying User-Agent, ≤4 req/s, exponential backoff on 429/5xx,
+on-disk response cache (feed pages are served from cache on rerun;
+provenance checks deliberately bypass cache reads to observe current
+state).
+
+## deps.dev (corroborating source)
+
+`GET https://api.deps.dev/v3/systems/RUBYGEMS/packages/<name>/versions/<v>`
+returns `attestations[]` with `verified: true`, `sourceRepository`, `commit`,
+and a URL pointing back to the rubygems.org attestations API (sample saved).
+Useful as a cross-check or to skip cert parsing, but it adds a third-party
+dependency, has no download counts, and its freshness lag is unknown, so it
+is not on the primary path.
+
+## crates.io (light pass; informs schema only)
+
+- `GET /api/v1/crates/<crate>/<version>` version objects carry
+  **`published_by`** (human user object) and **`trustpub_data`**. For
+  cargo-semver-checks 0.50.0: `{provider: "github", repository:
+  "obi1kenobi/cargo-semver-checks", run_id, sha}` with `published_by: null`.
+  serde 1.0.228: `published_by` set, `trustpub_data: null`. So crates.io
+  exposes trusted publishing directly in JSON; no cert parsing, and unlike
+  RubyGems it also names the human pusher in the API.
+- Daily database dump confirmed real: `static.crates.io/db-dump.tar.gz`
+  (redirects to cloudfront; 1.72 GB, Last-Modified 2026-08-14). Contents not
+  yet inspected; whether it includes `trustpub_data` is an open question
+  for the crates.io adapter.
+- `crates.io/data-access` is a JS SPA and was unreadable by plain fetch;
+  policy details (documented crawler rate limit, UA requirements) should be
+  re-checked when building the crates adapter.
+
+## Schema implications
+
+Two provenance shapes must coexist:
+
+| | RubyGems | crates.io |
+| --- | --- | --- |
+| Signal | sigstore attestation presence (lower bound of TP) | `trustpub_data` on the version (direct) |
+| Identity | parsed from Fulcio cert extensions | plain JSON fields |
+| Human pusher | HTML-only (not tracked) | `published_by` in API |
+
+So `package_versions` gets a nullable provenance block sourced from either
+shape: `provenance_kind` (e.g. `sigstore_attestation` / `trustpub_metadata`),
+`provenance_provider` (issuer/provider), `source_repository`, `workflow_ref`,
+`commit_sha`, `run_url`, `attestation_count`. (An early sketch also called
+for a raw-JSON column; the implemented schema stores only the parsed
+identity; raw bundles remain fetchable from the registry.) Adoption stats
+count "versions with provenance" and "packages with ≥1 provenant version",
+which mean the same thing across both registries.

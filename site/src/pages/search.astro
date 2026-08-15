@@ -1,0 +1,82 @@
+---
+export const prerender = false;
+
+import Base from '../layouts/Base.astro';
+import { getDb, registryByName, searchPackages } from '../lib/d1.ts';
+import { formatCount, packageNoun, shortDate } from '../lib/format.ts';
+
+const db = getDb();
+const query = (Astro.url.searchParams.get('q') ?? '').trim();
+const registry = await registryByName(db, 'rubygems');
+const results = query && registry ? await searchPackages(db, registry.id, query) : [];
+---
+
+<Base title="Search · rakkan" query={query}>
+  <header class="page-heading">
+    <h1>Search</h1>
+    <p>
+      The tracked set is the top 1,000 {packageNoun(registry?.name, 2)} by total downloads, or
+      <a href="/packages">browse the full index</a>.
+    </p>
+  </header>
+
+  {
+    !query ? (
+      <section class="empty-state compact">
+        <h3>Search by package name</h3>
+        <p>Use the search field above.</p>
+      </section>
+    ) : results.length === 0 ? (
+      <section class="empty-state compact">
+        <h3>No tracked packages found</h3>
+        <p>
+          Nothing in {registry?.display_name ?? 'the active registry'} matches <code>{query}</code>.
+        </p>
+      </section>
+    ) : (
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h3>
+              Results for <code>{query}</code>
+            </h3>
+            <p>
+              {results.length} tracked {packageNoun(registry?.name, results.length)} matched in{' '}
+              {registry?.display_name}.
+            </p>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th class="num">Rank</th>
+                <th class="num">Publishing provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((pkg) => (
+                <tr>
+                  <td>
+                    <a class="package-name" href={`/packages/${pkg.name}`}>
+                      {pkg.name}
+                    </a>
+                  </td>
+                  <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                  <td class="num">
+                    {pkg.first_provenant_at ? (
+                      <span class="badge yes">Since {shortDate(pkg.first_provenant_at)}</span>
+                    ) : (
+                      <span class="badge neutral">Not observed</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )
+  }
+</Base>

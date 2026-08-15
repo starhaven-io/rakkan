@@ -1,0 +1,213 @@
+---
+export const prerender = false;
+
+import Base from '../layouts/Base.astro';
+import {
+  getDb,
+  latestSnapshot,
+  recentConversions,
+  registryByName,
+  snapshotSeries,
+  topPackages,
+} from '../lib/d1.ts';
+import { formatCount, packageNoun, percentage, safeHttpsUrl, shortDate } from '../lib/format.ts';
+
+const db = getDb();
+const registry = await registryByName(db, 'rubygems');
+const snapshot = registry ? await latestSnapshot(db, registry.id) : null;
+const series = registry ? await snapshotSeries(db, registry.id) : [];
+const conversions = registry ? await recentConversions(db, registry.id) : [];
+const top = registry ? await topPackages(db, registry.id) : [];
+
+const adoptionRate = snapshot ? percentage(snapshot.provenant_packages, snapshot.tracked_packages) : 0;
+const versionRate = snapshot ? percentage(snapshot.provenant_versions, snapshot.tracked_versions) : 0;
+const packageWord = packageNoun(registry?.name, snapshot?.tracked_packages ?? 2);
+const registryUrl = safeHttpsUrl(registry?.url);
+---
+
+<Base>
+  {
+    !registry || !snapshot ? (
+      <section class="empty-state">
+        <h1>No data yet</h1>
+        <p>The D1 database has not been loaded. Export from the ingestion side and load it locally:</p>
+        <div class="command-list">
+          <code>bundle exec rake export:d1</code>
+          <code>cd site && npx wrangler d1 execute rakkan --local --file=../db/d1_export.sql</code>
+        </div>
+      </section>
+    ) : (
+      <>
+        <section class="registry-hero">
+          <div class="hero-copy">
+            <h1>{registry.display_name}</h1>
+            <p>
+              Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)}{' '}
+              {packageWord} by total downloads. Attestation presence is a lower bound: a{' '}
+              {packageNoun(registry.name)} can be pushed by a trusted publisher without attestations.
+            </p>
+          </div>
+          <div class="hero-actions">
+            {registryUrl && (
+              <a class="url" href={registryUrl}>
+                {new URL(registryUrl).host} ↗
+              </a>
+            )}
+          </div>
+        </section>
+
+        <section class="stats-grid" aria-label="Latest adoption snapshot">
+          <article class="stat-card featured">
+            <span class="stat-label">Package adoption</span>
+            <strong class="stat-value">{adoptionRate}%</strong>
+            <div class="progress-track" aria-hidden="true">
+              <div class="progress-fill" style={`width: ${adoptionRate}%`} />
+            </div>
+            <span class="stat-detail">
+              {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)}{' '}
+              tracked {packageWord}
+            </span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Adopted packages</span>
+            <strong class="stat-value">{formatCount(snapshot.provenant_packages)}</strong>
+            <span class="stat-detail">
+              {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one
+              release carrying provenance
+            </span>
+          </article>
+          <article class="stat-card">
+            <span class="stat-label">Versions with provenance</span>
+            <strong class="stat-value">{formatCount(snapshot.provenant_versions)}</strong>
+            <span class="stat-detail">
+              {versionRate}% of {formatCount(snapshot.tracked_versions)} tracked versions
+            </span>
+          </article>
+        </section>
+
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <h3>Adoption over time</h3>
+              <p>One observation per day.</p>
+            </div>
+            <span class="panel-meta">
+              {series.length} {series.length === 1 ? 'point' : 'points'}
+            </span>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date (UTC)</th>
+                  <th class="num">Packages with provenance</th>
+                  <th class="num">Adoption</th>
+                  <th class="num hide-mobile">Versions with provenance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {series.map((snap) => {
+                  const rate = percentage(snap.provenant_packages, snap.tracked_packages);
+                  return (
+                    <tr>
+                      <td class="date-cell">{shortDate(snap.taken_on)}</td>
+                      <td class="num">
+                        {formatCount(snap.provenant_packages)} / {formatCount(snap.tracked_packages)}
+                      </td>
+                      <td class="num">
+                        <div class="trend-value">
+                          <div class="trend-bar" aria-hidden="true">
+                            <span style={`width: ${rate}%`} />
+                          </div>
+                          <strong>{rate}%</strong>
+                        </div>
+                      </td>
+                      <td class="num hide-mobile">{formatCount(snap.provenant_versions)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <div class="content-grid">
+          <section class="panel">
+            <header class="panel-header">
+              <div>
+                <h3>Recently adopted</h3>
+                <p>Ordered by first release with provenance.</p>
+              </div>
+            </header>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Package</th>
+                    <th class="num">Rank</th>
+                    <th class="num">Since</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {conversions.map((pkg) => (
+                    <tr>
+                      <td>
+                        <a class="package-name" href={`/packages/${pkg.name}`}>
+                          {pkg.name}
+                        </a>
+                      </td>
+                      <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                      <td class="num date-cell">{shortDate(pkg.first_provenant_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-header">
+              <div>
+                <h3>Most downloaded</h3>
+                <p>The head of the tracked set.</p>
+              </div>
+              <span class="panel-meta">
+                <a href="/packages">browse all →</a>
+              </span>
+            </header>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Package</th>
+                    <th class="num">Rank</th>
+                    <th class="num">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {top.map((pkg) => (
+                    <tr>
+                      <td>
+                        <a class="package-name" href={`/packages/${pkg.name}`}>
+                          {pkg.name}
+                        </a>
+                      </td>
+                      <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                      <td class="num">
+                        {pkg.first_provenant_at ? (
+                          <span class="badge yes">With provenance</span>
+                        ) : (
+                          <span class="badge neutral">Not yet</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      </>
+    )
+  }
+</Base>

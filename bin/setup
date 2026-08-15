@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+IFS=$'\n\t'
+
+# Idempotent fresh-clone setup: the engine (Ruby, SQLite), its seed data,
+# and the site (Astro on a local D1). Safe to re-run at any time.
+
+announce() {
+  local bold='\033[1m'
+  local reset='\033[0m'
+  printf "${bold}%s${reset}\n" "$1"
+}
+
+cd "$(dirname "$0")/.."
+
+announce "Installing engine dependencies..."
+bundle check || bundle install
+
+if [ ! -f .env ]; then
+  announce "Creating .env from .env.example..."
+  cp .env.example .env
+fi
+
+announce "Preparing the databases..."
+bundle exec hanami db prepare
+
+announce "Loading the tracked set from seed data (no network)..."
+bundle exec rake ingest:seed
+bundle exec rake snapshot:take
+
+announce "Installing site dependencies..."
+(cd site && npm ci)
+
+announce "Exporting to the site's local D1..."
+bundle exec rake export:d1
+(cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql)
+
+announce "🌸 Setup complete. Start the site with: just dev"

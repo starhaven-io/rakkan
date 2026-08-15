@@ -1,0 +1,16 @@
+.env
+.env*.local
+log/*
+db/*.sqlite
+db/*.sqlite-wal
+db/*.sqlite-shm
+db/*.sqlite-journal
+db/d1_export.sql
+site/node_modules/
+site/dist/
+site/.wrangler/
+.wrangler/
+site/.astro/
+spec/examples.txt
+vendor/bundle/
+var/

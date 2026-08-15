@@ -1,0 +1,21 @@
+{
+  "name": "rakkan",
+  "compatibility_date": "2026-04-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "workers_dev": false,
+  "preview_urls": false,
+  // The rakkan.dev custom domain is attached out-of-band: wrangler deploys
+  // the worker only, so CI needs no zone-scoped token. Don't add a `routes` entry — managing the domain here requires
+  // Zone:Workers Routes permissions the deploy token deliberately lacks.
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./dist/client",
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "rakkan",
+      "database_id": "202cf2d7-a048-48ea-bb59-9147226dab65",
+    },
+  ],
+}
