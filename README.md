@@ -1,5 +1,8 @@
 # Rakkan
 
+<!-- fleet:block badges -->
+<!-- fleet:end -->
+
 A public tracker for trusted publishing adoption across package registries:
 which packages publish with verifiable provenance, what share of the
 most-downloaded packages have adopted it, and how that changes over time.
@@ -94,6 +97,8 @@ responses (see `research/`).
   weekly dump (see `manifest.json`)
 - `research/`: the dump-processing scripts and recorded registry samples
 
+<!-- fleet:block license-section -->
+
 ## License
 
 Code is licensed [AGPL-3.0-only](LICENSE). The files under `seed/` are
@@ -102,3 +107,5 @@ excerpts derived from the
 included for reproducibility; rights in the underlying records remain
 with their owners under RubyGems.org's terms, and rakkan claims no
 separate license over them (see [seed/README.md](seed/README.md)).
+
+<!-- fleet:end -->
