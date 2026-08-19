@@ -49,7 +49,7 @@ just dev
 The equivalent manual steps, when you want them piecemeal: `bundle
 install`, `cp .env.example .env`, `bundle exec hanami db prepare`,
 `bundle exec rake ingest:seed`, `bundle exec rake snapshot:take`, then
-`cd site && npm ci`, and finally `just site-db` to export and load the
+`just install-site`, and finally `just site-db` to export and load the
 local D1.
 
 ## Keeping it fresh (live API tasks)

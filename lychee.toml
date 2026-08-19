@@ -1,0 +1,8 @@
+# Configuration for https://github.com/lycheeverse/lychee
+# Checks project documentation links. Run with `just lychee`.
+
+max_concurrency = 20
+timeout = 20
+max_retries = 3
+
+exclude = ["^http://localhost:4321/?$"]
