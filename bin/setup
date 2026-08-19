@@ -29,7 +29,8 @@ bundle exec rake ingest:seed
 bundle exec rake snapshot:take
 
 announce "Installing site dependencies..."
-(cd site && npm ci)
+node scripts/check-npm-install-policy.mjs site
+(cd site && npm ci --strict-allow-scripts)
 
 announce "Exporting to the site's local D1..."
 bundle exec rake export:d1

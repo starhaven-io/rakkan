@@ -1,8 +1,13 @@
 # Setup
 
-# Install dependencies
+# Install engine dependencies
 install:
     bundle install
+
+# Install site dependencies under the reviewed install-script policy
+install-site:
+    node scripts/check-npm-install-policy.mjs site
+    cd site && npm ci --strict-allow-scripts
 
 # Create and migrate the development and test databases
 db-prepare:
@@ -30,7 +35,7 @@ snapshot:
 export-d1:
     bundle exec rake export:d1
 
-# Load the export into the site's local D1 (requires site deps: cd site && npm ci)
+# Load the export into the site's local D1 (requires `just install-site`)
 site-db: export-d1
     cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql
 
@@ -66,6 +71,7 @@ check:
     skipped=()
     run() {
         echo "--- $1 ---"
+        shift
         if ! "$@"; then
             failed=1
         fi
@@ -74,16 +80,17 @@ check:
         echo "--- $1 --- skipped ($2 not found)"
         skipped+=("$2 (brew install $3)")
     }
-    run bundle exec rspec
-    run bundle exec rubocop
+    run npm-policy node scripts/check-npm-install-policy.mjs site
+    run rspec bundle exec rspec
+    run rubocop bundle exec rubocop
     if [ -d site/node_modules ]; then
-        run bash -c 'cd site && npm run --silent test'
-        run bash -c 'cd site && ./node_modules/.bin/astro build --silent > /dev/null'
+        run site-tests bash -c 'cd site && npm run --silent test'
+        run site-build bash -c 'cd site && ./node_modules/.bin/astro build --silent > /dev/null'
     else
-        skip site-tests node_modules "just install-site (cd site && npm ci)"
+        skip site-tests node_modules "just install-site"
     fi
     if command -v typos &>/dev/null; then
-        run typos
+        run typos typos
     else
         skip typos typos typos-cli
     fi
@@ -96,6 +103,10 @@ check:
         failed=1
     fi
     exit $failed
+
+# Check documentation links
+lychee:
+    lychee --config lychee.toml README.md DATA_SOURCES.md seed/README.md
 
 # fleet:block install-hooks
 # Install git hooks (AI trailer guard + DCO sign-off + pre-push checks). Run once per clone.

@@ -1,0 +1,9 @@
+# Recorded registry data is verbatim evidence, not prose to spell-check.
+[files]
+extend-exclude = [
+  "research/samples/",
+  "seed/",
+  "spec/fixtures/",
+  "config/db/structure.sql",
+  "vendor/",
+]
