@@ -1,0 +1,136 @@
+name: Refresh Data
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_limit:
+        description: Maximum provenance lookups for this run
+        required: true
+        default: "250"
+        type: string
+  schedule:
+    # Offset from the hour and other organization schedules.
+    - cron: "17 06 * * *"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/refresh-data.yml"
+      - "config/db/migrate/**"
+      - "config/db/structure.sql"
+      - "seed/**"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false # never interrupt a production D1 replacement
+
+jobs:
+  refresh:
+    name: Refresh registry data
+    if: github.repository_owner == 'starhaven-io'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read # required to checkout repository
+    environment: cloudflare
+    env:
+      DATABASE_URL: sqlite://db/rakkan.sqlite
+      HANAMI_ENV: production
+      REFRESH_LIMIT: ${{ inputs.refresh_limit || '250' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate refresh limit
+        run: |
+          if ! [[ "${REFRESH_LIMIT}" =~ ^[1-9][0-9]{0,3}$ ]] || (( REFRESH_LIMIT > 1000 )); then
+            echo "::error::refresh_limit must be an integer from 1 to 1000"
+            exit 1
+          fi
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Check npm install-script policy
+        run: node scripts/check-npm-install-policy.mjs site
+
+      - name: Install Wrangler
+        working-directory: site
+        # Fail if an unreviewed dependency install script is introduced.
+        run: npm ci --strict-allow-scripts
+
+      - name: Prepare fresh engine database
+        run: bundle exec hanami db prepare
+
+      - name: Export current production data
+        working-directory: site
+        run: |
+          ./node_modules/.bin/wrangler d1 export rakkan \
+            --remote \
+            --skip-confirmation \
+            --no-schema \
+            --table=registries \
+            --table=packages \
+            --table=package_versions \
+            --table=adoption_snapshots \
+            --output="${D1_DATA_SQL}"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          D1_DATA_SQL: ${{ runner.temp }}/rakkan-d1-data.sql
+          WRANGLER_SEND_METRICS: "false"
+
+      - name: Restore production history
+        env:
+          D1_DATA_SQL: ${{ runner.temp }}/rakkan-d1-data.sql
+        run: |
+          sqlite3 db/rakkan.sqlite <<SQL
+          .bail on
+          PRAGMA foreign_keys = ON;
+          BEGIN IMMEDIATE;
+          .read ${D1_DATA_SQL}
+          COMMIT;
+          SQL
+
+          violations="$(sqlite3 db/rakkan.sqlite 'PRAGMA foreign_key_check;')"
+          test -z "${violations}"
+
+          for table in registries packages package_versions adoption_snapshots; do
+            rows="$(sqlite3 db/rakkan.sqlite "SELECT COUNT(*) FROM ${table};")"
+            if (( rows == 0 )); then
+              echo "::error::production export contained no ${table} rows"
+              exit 1
+            fi
+          done
+
+      - name: Ingest registry changes
+        run: |
+          bundle exec rake ingest:seed
+          bundle exec rake ingest:discover
+          bundle exec rake "ingest:refresh[${REFRESH_LIMIT}]"
+          bundle exec rake snapshot:take
+
+      - name: Export refreshed D1 database
+        run: bundle exec rake export:d1
+
+      - name: Replace production data
+        working-directory: site
+        run: ./node_modules/.bin/wrangler d1 execute rakkan --remote --file=../db/d1_export.sql --yes
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
