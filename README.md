@@ -80,6 +80,11 @@ The two data sources run on different cadences, deliberately:
   `build_seed.rb`), and packages that fell out of the top 1,000 are
   untracked. Between dumps the denominator intentionally holds still.
 
+The `Refresh Data` workflow runs the daily path against a fresh engine
+database restored from production D1, then replaces D1 only after ingestion,
+snapshotting, and export all succeed. Changes under `site/` deploy separately
+through the `Deploy Site` workflow; site deploys do not rewrite data.
+
 ## Tests
 
 ```sh
