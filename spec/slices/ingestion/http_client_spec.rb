@@ -11,7 +11,7 @@ RSpec.describe Ingestion::HTTPClient do
   let(:url) { "https://rubygems.org/api/v1/attestations/example-1.0.0.json" }
   let(:sleeps) { [] }
   let(:clock) { -> { 1000.0 } }
-  let(:transport) { ->(_uri) { raise "transport should not be reached" } }
+  let(:transport) { ->(_uri, _headers) { raise "transport should not be reached" } }
 
   after { FileUtils.remove_entry(cache_dir) }
 
@@ -52,13 +52,26 @@ RSpec.describe Ingestion::HTTPClient do
     end
 
     it "writes successful responses to the cache" do
-      transport = ->(_uri) { response(200, body: '[{"ok":true}]') }
+      transport = ->(_uri, _headers) { response(200, body: '[{"ok":true}]') }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       client.get_json(url)
 
       cached = described_class.new(cache_dir:)
       expect(cached.get_json(url)).to eq([{ "ok" => true }])
+    end
+
+    it "keeps representations with different media types separate" do
+      transport = lambda do |_uri, headers|
+        response(200, body: JSON.generate({ "accept" => headers.fetch("Accept") }))
+      end
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      json = client.get_json(url, accept: "application/json")
+      integrity = client.get_json(url, accept: "application/vnd.pypi.integrity.v1+json")
+
+      expect(json).to eq("accept" => "application/json")
+      expect(integrity).to eq("accept" => "application/vnd.pypi.integrity.v1+json")
     end
   end
 
@@ -72,7 +85,7 @@ RSpec.describe Ingestion::HTTPClient do
 
     it "honors Retry-After on 429 and then succeeds" do
       responses = [response(429, headers: { "Retry-After" => "7" }), response(200)]
-      transport = ->(_uri) { responses.shift }
+      transport = ->(_uri, _headers) { responses.shift }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       expect(client.get_json(url, ttl: 0)).to eq([])
@@ -82,7 +95,7 @@ RSpec.describe Ingestion::HTTPClient do
     it "honors HTTP-date Retry-After values" do
       retry_at = (Time.now + 30).httpdate
       responses = [response(429, headers: { "Retry-After" => retry_at }), response(200)]
-      transport = ->(_uri) { responses.shift }
+      transport = ->(_uri, _headers) { responses.shift }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       expect(client.get_json(url, ttl: 0)).to eq([])
@@ -92,7 +105,7 @@ RSpec.describe Ingestion::HTTPClient do
 
     it "falls back to exponential backoff on malformed Retry-After" do
       responses = [response(429, headers: { "Retry-After" => "soonish" }), response(200)]
-      transport = ->(_uri) { responses.shift }
+      transport = ->(_uri, _headers) { responses.shift }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       expect(client.get_json(url, ttl: 0)).to eq([])
@@ -101,7 +114,7 @@ RSpec.describe Ingestion::HTTPClient do
 
     it "backs off exponentially and gives up after MAX_ATTEMPTS" do
       calls = 0
-      transport = lambda { |_uri|
+      transport = lambda { |_uri, _headers|
         calls += 1
         response(500)
       }
@@ -114,10 +127,19 @@ RSpec.describe Ingestion::HTTPClient do
     end
 
     it "returns nil on 404 without retrying" do
-      transport = ->(_uri) { response(404) }
+      transport = ->(_uri, _headers) { response(404) }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       expect(client.get_json(url, ttl: 0)).to be_nil
+      expect(sleeps).to be_empty
+    end
+
+    it "fails closed on non-retryable errors" do
+      transport = ->(_uri, _headers) { response(403) }
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(described_class::Error, /returned 403/)
       expect(sleeps).to be_empty
     end
   end
@@ -126,7 +148,7 @@ RSpec.describe Ingestion::HTTPClient do
     it "spaces consecutive requests to the minimum interval" do
       times = [0.0, 0.0, 0.1, 0.25]
       clock = -> { times.shift }
-      transport = ->(_uri) { response(200) }
+      transport = ->(_uri, _headers) { response(200) }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
       client.get_json(url, ttl: 0)
@@ -134,6 +156,32 @@ RSpec.describe Ingestion::HTTPClient do
 
       expect(sleeps.size).to eq(1)
       expect(sleeps.first).to be_within(0.001).of(0.15)
+    end
+
+    it "paces crates.io at its one-request-per-second policy" do
+      times = [0.0, 0.0, 0.25, 1.0]
+      clock = -> { times.shift }
+      transport = ->(_uri, _headers) { response(200) }
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+      crates_url = "https://crates.io/api/v1/crates/serde/1.0.228"
+
+      client.get_json(crates_url, ttl: 0)
+      client.get_json(crates_url, ttl: 0)
+
+      expect(sleeps.size).to eq(1)
+      expect(sleeps.first).to be_within(0.001).of(0.75)
+    end
+
+    it "tracks pacing independently per host" do
+      times = [0.0, 0.0, 0.1, 0.1]
+      clock = -> { times.shift }
+      transport = ->(_uri, _headers) { response(200) }
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      client.get_json("https://crates.io/api/v1/crates/serde/1.0.228", ttl: 0)
+      client.get_json(url, ttl: 0)
+
+      expect(sleeps).to be_empty
     end
   end
 end

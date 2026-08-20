@@ -1,0 +1,14 @@
+{
+  "info": {
+    "name": "sampleproject",
+    "version": "4.0.0"
+  },
+  "urls": [
+    {
+      "filename": "sampleproject-4.0.0-py3-none-any.whl"
+    },
+    {
+      "filename": "sampleproject-4.0.0.tar.gz"
+    }
+  ]
+}

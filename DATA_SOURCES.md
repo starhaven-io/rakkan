@@ -1,13 +1,14 @@
 # Data sources for trusted publishing adoption
 
-Investigated 2026-08-14. Sample responses live in
-`research/samples/`; the scripts behind the dump-derived numbers live in
-`research/`. Registry state referenced throughout is the weekly dump dated
-2026-08-10 plus live API probes on 2026-08-14. Evidence caveat: the probe
-script retained response bodies only, so saved samples do not preserve
-status codes or headers (statuses were observed at probe time), and the raw
-dump is not retained; dump-derived claims are reproducible from a fresh
-dump via the scripts, not from the committed artifacts alone.
+Investigated 2026-08-14 and expanded for crates.io and PyPI on 2026-08-19.
+Recorded samples live in `research/samples/`; distilled offline fixtures live
+in `spec/fixtures/`; the scripts behind the dump-derived numbers live in
+`research/`. RubyGems registry state referenced throughout is the weekly dump
+dated 2026-08-10 plus live API probes on 2026-08-14. Evidence caveat: the probe
+script retained response bodies only, so saved samples do not preserve status
+codes or headers (statuses were observed at probe time), and the raw dump is
+not retained; dump-derived claims are reproducible from a fresh dump via the
+scripts, not from the committed artifacts alone.
 
 ## Summary and recommendation
 
@@ -121,7 +122,7 @@ Useful as a cross-check or to skip cert parsing, but it adds a third-party
 dependency, has no download counts, and its freshness lag is unknown, so it
 is not on the primary path.
 
-## crates.io (light pass; informs schema only)
+## crates.io
 
 - `GET /api/v1/crates/<crate>/<version>` version objects carry
   **`published_by`** (human user object) and **`trustpub_data`**. For
@@ -130,29 +131,65 @@ is not on the primary path.
   serde 1.0.228: `published_by` set, `trustpub_data: null`. So crates.io
   exposes trusted publishing directly in JSON; no cert parsing, and unlike
   RubyGems it also names the human pusher in the API.
+- [crates.io documents `trustpub_data` as
+  unstable](https://github.com/rust-lang/crates.io/blob/main/crates/crates_io_api_types/src/lib.rs).
+  The adapter therefore maps only the small provider/repository/run/SHA shape
+  evidenced in the recorded samples and does not persist the raw object as a
+  stable contract.
 - Daily database dump confirmed real: `static.crates.io/db-dump.tar.gz`
   (redirects to cloudfront; 1.72 GB, Last-Modified 2026-08-14). Contents not
   yet inspected; whether it includes `trustpub_data` is an open question
   for the crates.io adapter.
-- `crates.io/data-access` is a JS SPA and was unreadable by plain fetch;
-  policy details (documented crawler rate limit, UA requirements) should be
-  re-checked when building the crates adapter.
+- The [official data-access policy](https://crates.io/data-access) prefers the
+  index or daily dump for bulk access and caps API clients at one request per
+  second with an identifying User-Agent. `Ingestion::HTTPClient` enforces that
+  host-specific interval; provenance checks bypass cache reads so a later
+  trusted publication cannot remain hidden behind a cached negative response.
+- The implemented adapter is provenance-only. Seeding, ranking, and discovery
+  stay disabled until the dump is inspected and distilled into offline seed
+  fixtures; a top-1,000 backfill must not become per-version API crawling.
+
+## PyPI
+
+- The [release JSON API](https://docs.pypi.org/api/json/) lists the filenames
+  belonging to one release at `GET /pypi/<project>/<version>/json`. PyPI's
+  [Integrity API](https://docs.pypi.org/api/integrity/) then serves PEP 740
+  provenance per file through this route:
+  `GET /integrity/<project>/<version>/<filename>/provenance`. It uses
+  `application/vnd.pypi.integrity.v1+json`; 404 means that file has no
+  provenance.
+- A provenance object groups attestations by Trusted Publisher identity. Its
+  `publisher` object exposes the provider plus provider-specific repository and
+  workflow fields. The adapter aggregates every distribution in a release,
+  chooses a deterministic identity when files disagree, and records the total
+  attestation count. It records registry-accepted provenance presence and does
+  not independently re-verify the signatures.
+- PyPI's public BigQuery [`file_downloads`
+  dataset](https://docs.pypi.org/api/bigquery/) is the official bulk source for
+  a download-ranked tracked set. The [API
+  guidance](https://docs.pypi.org/api/) prefers RSS for new-package and release
+  polling. The seed query, ranking window, and RSS cursor semantics still need
+  to be fixed and recorded before ingestion is enabled.
+- The implemented adapter is therefore provenance-only. Its per-file Integrity
+  API calls are suitable for fresh releases after discovery, not for a blind
+  historical backfill across every release of the top 1,000 projects.
 
 ## Schema implications
 
-Two provenance shapes must coexist:
+Three provenance shapes must coexist:
 
-| | RubyGems | crates.io |
-| --- | --- | --- |
-| Signal | sigstore attestation presence (lower bound of TP) | `trustpub_data` on the version (direct) |
-| Identity | parsed from Fulcio cert extensions | plain JSON fields |
-| Human pusher | HTML-only (not tracked) | `published_by` in API |
+| | RubyGems | crates.io | PyPI |
+| --- | --- | --- | --- |
+| Signal | sigstore attestation presence (lower bound of TP) | `trustpub_data` on the version (direct) | PEP 740 provenance on a release file |
+| Identity | parsed from Fulcio cert extensions | plain JSON fields | Trusted Publisher fields in the provenance object |
+| Human pusher | HTML-only (not tracked) | `published_by` in API | not exposed by the provenance API |
 
-So `package_versions` gets a nullable provenance block sourced from either
-shape: `provenance_kind` (e.g. `sigstore_attestation` / `trustpub_metadata`),
+So `package_versions` gets a nullable provenance block sourced from any of
+these shapes: `provenance_kind` (for example, `sigstore_attestation`,
+`trustpub_metadata`, or `digital_attestation`),
 `provenance_provider` (issuer/provider), `source_repository`, `workflow_ref`,
 `commit_sha`, `run_url`, `attestation_count`. (An early sketch also called
 for a raw-JSON column; the implemented schema stores only the parsed
 identity; raw bundles remain fetchable from the registry.) Adoption stats
 count "versions with provenance" and "packages with ≥1 provenant version",
-which mean the same thing across both registries.
+which mean the same thing across all three registries.

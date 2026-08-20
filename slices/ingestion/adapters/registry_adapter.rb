@@ -3,9 +3,9 @@
 
 module Ingestion
   module Adapters
-    # Interface every registry adapter implements. The ingestion operations
-    # depend only on this surface, so adding crates.io later means adding one
-    # class here and a row in the registries table.
+    # Interface every complete registry adapter implements. Provenance readers
+    # may land before a registry's bulk seed and discovery path; ingestion tasks
+    # must not select that adapter until the remaining methods are implemented.
     #
     # Seed methods stream from local, dump-derived files (no network).
     # Live methods hit the registry's public API through the polite client.

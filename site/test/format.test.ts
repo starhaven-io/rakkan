@@ -72,6 +72,7 @@ test('packageNoun follows the registry slug', () => {
 test('provenanceLabel names the signal per kind', () => {
   assert.equal(provenanceLabel('sigstore_attestation'), 'Sigstore');
   assert.equal(provenanceLabel('trustpub_metadata'), 'Trusted publisher');
+  assert.equal(provenanceLabel('digital_attestation'), 'Digital attestation');
 });
 
 test('repositoryLabel shortens repository URLs for link text', () => {

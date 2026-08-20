@@ -19,6 +19,12 @@ module Ingestion
       CHUNK = 2_000
 
       def call(adapter: rubygems)
+        # Resolve every seed stream before writing so a provenance-only
+        # adapter fails at the interface boundary without leaving registry data.
+        tracked_packages = adapter.each_tracked_package
+        seed_versions = adapter.each_seed_version
+        seed_attestations = adapter.each_seed_attestation
+
         now = Time.now.utc
         registry = registry_repo.find_or_create(
           name: adapter.registry_slug,
@@ -26,11 +32,11 @@ module Ingestion
           url: adapter.registry_url
         )
 
-        package_count = upsert_packages(registry.id, adapter, now)
+        package_count = upsert_packages(registry.id, tracked_packages, now)
         ref_to_id = packages.where(registry_id: registry.id).select(:id, :registry_ref).to_a
                             .to_h { |p| [p[:registry_ref], p[:id]] }
-        version_count = upsert_versions(ref_to_id, adapter, now)
-        attested_count = apply_attestations(registry.id, adapter, now)
+        version_count = upsert_versions(ref_to_id, seed_versions, adapter, now)
+        attested_count = apply_attestations(registry.id, seed_attestations, adapter, now)
         recompute_first_provenant_at(registry.id)
         advance_feed_cursor(registry, adapter, now)
 
@@ -39,8 +45,8 @@ module Ingestion
 
       private
 
-      def upsert_packages(registry_id, adapter, now)
-        rows = adapter.each_tracked_package.map do |pkg|
+      def upsert_packages(registry_id, tracked_packages, now)
+        rows = tracked_packages.map do |pkg|
           pkg.merge(registry_id:, tracked: true, created_at: now, updated_at: now)
         end
         packages.dataset.db.transaction do
@@ -64,13 +70,13 @@ module Ingestion
         rows.size
       end
 
-      def upsert_versions(ref_to_id, adapter, now)
+      def upsert_versions(ref_to_id, seed_versions, adapter, now)
         count = 0
         # The dump's attestations table is authoritative at dump time, so
         # every seeded version starts out "checked as of the dump" rather
         # than "never checked"; only genuinely new versions need live calls.
         checked_at = adapter.seed_as_of
-        adapter.each_seed_version.each_slice(CHUNK) do |chunk|
+        seed_versions.each_slice(CHUNK) do |chunk|
           rows = chunk.filter_map do |v|
             package_id = ref_to_id[v[:package_ref]] or next
             v.except(:package_ref).merge(
@@ -93,13 +99,13 @@ module Ingestion
         count
       end
 
-      def apply_attestations(registry_id, adapter, now)
+      def apply_attestations(registry_id, seed_attestations, adapter, now)
         # Stamp with the dump's own timestamp, and never regress a newer
         # observation (e.g. a live refresh that ran after the dump was cut).
         seed_at = adapter.seed_as_of || now
         registry_package_ids = packages.dataset.where(registry_id:).select(:id)
         count = 0
-        adapter.each_seed_attestation do |att|
+        seed_attestations.each do |att|
           count += package_versions.dataset
                                    .where(registry_ref: att[:version_ref], package_id: registry_package_ids)
                                    .where(
