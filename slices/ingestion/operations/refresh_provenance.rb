@@ -5,7 +5,8 @@ module Ingestion
     # Ask the registry for provenance on versions we have not checked yet
     # (or not recently). Resumable by construction: each version's row is
     # updated as soon as it is checked, so an interrupted run just continues
-    # where it stopped. `limit` caps the number of live requests per run.
+    # where it stopped. `limit` caps the number of versions checked per run;
+    # registries with per-file provenance may make several requests per version.
     # Convergent with registry state: checks bypass the response cache, and
     # a negative answer clears any previously stored provenance.
     class RefreshProvenance < Ingestion::Operation

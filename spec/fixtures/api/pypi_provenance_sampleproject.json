@@ -1,0 +1,19 @@
+{
+  "attestation_bundles": [
+    {
+      "attestations": [
+        {
+          "envelope": {}
+        }
+      ],
+      "publisher": {
+        "claims": null,
+        "environment": "",
+        "kind": "GitHub",
+        "repository": "pypa/sampleproject",
+        "workflow": "release.yml"
+      }
+    }
+  ],
+  "version": 1
+}

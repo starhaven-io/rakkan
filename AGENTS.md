@@ -3,9 +3,11 @@
 rakkan is a public tracker for trusted publishing adoption across package
 registries: which packages publish with verifiable provenance, adoption share
 among the most-downloaded packages, and trends over time. RubyGems.org is the
-first registry; the schema and ingestion pipeline are registry-agnostic and
-crates.io is planned next. Prefer reading the Hanami v3.0 guides
-(hanakai.org) or installed gem source over assuming framework APIs.
+first production registry; the schema and ingestion pipeline are
+registry-agnostic. crates.io and PyPI provenance adapters are present; their
+bulk tracked-set seeds and release discovery are the next phase. Prefer reading
+the Hanami v3.0 guides (hanakai.org) or installed gem source over assuming
+framework APIs.
 
 ## Project overview
 
@@ -17,7 +19,8 @@ crates.io is planned next. Prefer reading the Hanami v3.0 guides
   schema verbatim; booleans are 1/0 integers and timestamps are UTC text.
 - **Layout:** the engine's persistence lives in `app/` (relations, repos,
   structs; no web code); ingestion lives in `slices/ingestion/` (adapter
-  interface, RubyGems adapter, sigstore attestation parsing, operations);
+  interface, RubyGems ingestion, crates.io and PyPI provenance adapters,
+  sigstore attestation parsing, operations);
   engine entry points are rake tasks (`lib/tasks/`). The web tier is
   `site/src/` (pages, D1 query layer, middleware).
 - **Data:** `seed/rubygems/` holds compact tracked-set data derived from the

@@ -21,7 +21,7 @@ ROM::SQL.migration do
 
       # Provenance block, shaped by the source investigation (DATA_SOURCES.md).
       # Null provenance_kind means "no provenance signal observed".
-      # rubygems: "sigstore_attestation"; crates.io (future): "trustpub_metadata".
+      # Open text keeps registry-specific signals additive without migrations.
       column :provenance_kind, String
       column :provenance_provider, String
       column :source_repository, String

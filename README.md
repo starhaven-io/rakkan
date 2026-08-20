@@ -11,9 +11,11 @@ A public tracker for trusted publishing adoption across package registries:
 which packages publish with verifiable provenance, what share of the
 most-downloaded packages have adopted it, and how that changes over time.
 
-RubyGems.org is the first registry. The schema and ingestion pipeline are
-registry-agnostic; crates.io is next. The ingestion engine is built with
-[Hanami 3.0](https://hanakai.org/hanami).
+RubyGems.org is the first production registry. The schema and ingestion
+pipeline are registry-agnostic; provenance adapters for crates.io and PyPI are
+now in place, while their bulk tracked-set seeds and release discovery remain
+the next implementation phase. The ingestion engine is built with [Hanami
+3.0](https://hanakai.org/hanami).
 
 Where the provenance signal actually lives, with recorded evidence, is
 documented in [DATA_SOURCES.md](DATA_SOURCES.md). Headline: for RubyGems it
@@ -100,8 +102,9 @@ responses (see `research/`).
 - `app/`: the engine's persistence layer (relations, repos, structs)
 - `site/`: the public web tier: Astro SSR on Cloudflare Workers reading
   the D1 export
-- `slices/ingestion/`: registry adapter interface, the RubyGems adapter,
-  sigstore attestation parsing, and the ingest/snapshot operations
+- `slices/ingestion/`: registry adapter interface, RubyGems ingestion,
+  crates.io and PyPI provenance adapters, sigstore attestation parsing, and
+  the ingest/snapshot operations
 - `seed/rubygems/`: compact tracked-set data derived from the 2026-08-10
   weekly dump (see `manifest.json`)
 - `research/`: the dump-processing scripts and recorded registry samples

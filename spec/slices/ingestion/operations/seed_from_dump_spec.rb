@@ -13,6 +13,7 @@ RSpec.describe Ingestion::Operations::SeedFromDump, :db do
   end
 
   let(:packages) { Hanami.app["relations.packages"] }
+  let(:registries) { Hanami.app["relations.registries"] }
   let(:versions) { Hanami.app["relations.package_versions"] }
 
   it "loads packages, versions, and provenance from seed data" do
@@ -93,5 +94,14 @@ RSpec.describe Ingestion::Operations::SeedFromDump, :db do
     row = versions.by_pk(attested[:id]).one
     expect(row[:provenance_provider]).to eq("live-observation")
     expect(row[:provenance_checked_at].to_time).to eq(live_at)
+  end
+
+  it "rejects a provenance-only adapter before creating its registry" do
+    provenance_only = Ingestion::Adapters::Cratesio.new(
+      http_client: FixtureHelpers::FakeHTTPClient.new
+    )
+
+    expect { operation.call(adapter: provenance_only) }.to raise_error(NotImplementedError)
+    expect(registries.count).to eq(0)
   end
 end

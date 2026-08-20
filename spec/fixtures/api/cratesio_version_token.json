@@ -1,0 +1,7 @@
+{
+  "version": {
+    "crate": "serde",
+    "num": "1.0.228",
+    "trustpub_data": null
+  }
+}

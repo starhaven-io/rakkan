@@ -11,8 +11,7 @@ module Ingestion
   # Polite HTTP JSON client for registry APIs.
   #
   # - Identifying User-Agent on every request.
-  # - Self-imposed request spacing well under rubygems.org's documented
-  #   10 req/s limit.
+  # - Per-host request spacing, including crates.io's 1 req/s ceiling.
   # - On-disk response cache so reruns never re-fetch (ttl: nil caches
   #   forever; seconds allow refresh; 0 bypasses the read cache).
   # - Exponential backoff on 429/5xx, honoring Retry-After when present.
@@ -21,7 +20,9 @@ module Ingestion
   # behavior is fully testable offline.
   class HTTPClient
     USER_AGENT = "rakkan/0.1 (trusted publishing adoption tracker; +https://rakkan.dev)"
-    MIN_INTERVAL = 0.25 # seconds between requests (~4 req/s)
+    DEFAULT_ACCEPT = "application/json"
+    DEFAULT_MIN_INTERVAL = 0.25
+    HOST_MIN_INTERVALS = { "crates.io" => 1.0 }.freeze
     MAX_ATTEMPTS = 4
 
     class Error < StandardError
@@ -35,19 +36,19 @@ module Ingestion
       @transport = transport || method(:default_transport)
       @sleeper = sleeper
       @clock = clock
-      @last_request_at = nil
+      @last_request_at = {}
     end
 
     # GET a URL and return parsed JSON (or nil on 404).
-    def get_json(url, ttl: nil)
-      cached = read_cache(url, ttl:)
+    def get_json(url, ttl: nil, accept: DEFAULT_ACCEPT)
+      cached = read_cache(url, ttl:, accept:)
       return cached[:json] if cached
 
-      response = fetch_with_backoff(url)
+      response = fetch_with_backoff(url, accept:)
       case response.code.to_i
       when 200
         json = JSON.parse(response.body)
-        write_cache(url, response.body)
+        write_cache(url, response.body, accept:)
         json
       when 404
         nil
@@ -58,13 +59,14 @@ module Ingestion
 
     private
 
-    def fetch_with_backoff(url)
+    def fetch_with_backoff(url, accept:)
       attempts = 0
       uri = URI(url)
+      headers = { "User-Agent" => USER_AGENT, "Accept" => accept }
       begin
         attempts += 1
-        throttle
-        response = @transport.call(uri)
+        throttle(uri.host)
+        response = @transport.call(uri, headers)
         raise RetryableError, response if retryable?(response)
 
         response
@@ -76,9 +78,9 @@ module Ingestion
       end
     end
 
-    def default_transport(uri)
+    def default_transport(uri, headers)
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 30) do |http|
-        http.get(uri.request_uri, { "User-Agent" => USER_AGENT, "Accept" => "application/json" })
+        http.get(uri.request_uri, headers)
       end
     end
 
@@ -115,23 +117,25 @@ module Ingestion
       delay.positive? ? delay.clamp(1, 300) : 2**attempts
     end
 
-    def throttle
+    def throttle(host)
       now = @clock.call
-      if @last_request_at && (elapsed = now - @last_request_at) < MIN_INTERVAL
-        @sleeper.call(MIN_INTERVAL - elapsed)
+      interval = HOST_MIN_INTERVALS.fetch(host, DEFAULT_MIN_INTERVAL)
+      if @last_request_at[host] && (elapsed = now - @last_request_at.fetch(host)) < interval
+        @sleeper.call(interval - elapsed)
       end
-      @last_request_at = @clock.call
+      @last_request_at[host] = @clock.call
     end
 
-    def cache_path(url)
-      File.join(@cache_dir, "#{Digest::SHA256.hexdigest(url)}.json")
+    def cache_path(url, accept: DEFAULT_ACCEPT)
+      cache_key = accept == DEFAULT_ACCEPT ? url : "#{url}\0accept:#{accept}"
+      File.join(@cache_dir, "#{Digest::SHA256.hexdigest(cache_key)}.json")
     end
 
-    def read_cache(url, ttl:)
+    def read_cache(url, ttl:, accept: DEFAULT_ACCEPT)
       # ttl: 0 means "observe current state": skip the read cache entirely.
       return nil if ttl&.zero?
 
-      path = cache_path(url)
+      path = cache_path(url, accept:)
       return nil unless File.exist?(path)
 
       envelope = JSON.parse(File.read(path))
@@ -142,12 +146,13 @@ module Ingestion
       nil
     end
 
-    def write_cache(url, body)
+    def write_cache(url, body, accept: DEFAULT_ACCEPT)
       FileUtils.mkdir_p(@cache_dir)
       # Net::HTTP hands back BINARY-tagged bodies; these are JSON, so UTF-8.
       utf8_body = body.dup.force_encoding(Encoding::UTF_8)
-      File.write(cache_path(url),
-                 JSON.generate({ "url" => url, "fetched_at" => Time.now.iso8601, "body" => utf8_body }))
+      File.write(cache_path(url, accept:),
+                 JSON.generate({ "url" => url, "accept" => accept,
+                                 "fetched_at" => Time.now.iso8601, "body" => utf8_body }))
     end
   end
 end

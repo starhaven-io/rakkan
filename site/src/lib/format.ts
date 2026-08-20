@@ -44,17 +44,18 @@ export function shortDate(value: string | null | undefined): string {
   });
 }
 
-/** Package noun per registry slug ("rubygems" today, "cratesio" planned). */
+/** Package noun per registry slug. */
 export function packageNoun(registryName: string | undefined, count = 1): string {
   const singular =
     registryName === 'rubygems' ? 'gem' : registryName === 'cratesio' ? 'crate' : 'package';
   return count === 1 ? singular : `${singular}s`;
 }
 
-/** "Sigstore" / "Trusted publisher" per provenance kind, mirroring the Hanami helper. */
+/** Registry-neutral display name for each stored provenance kind. */
 export function provenanceLabel(kind: string | null): string {
   if (kind === 'sigstore_attestation') return 'Sigstore';
   if (kind === 'trustpub_metadata') return 'Trusted publisher';
+  if (kind === 'digital_attestation') return 'Digital attestation';
   return 'Provenance';
 }
 
