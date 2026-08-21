@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "tmpdir"
+require "zlib"
+
 RSpec.describe Ingestion::Adapters::Cratesio do
   subject(:adapter) do
     described_class.new(seed_dir: fixture_path("seed", "cratesio"), http_client: client)
@@ -49,9 +52,11 @@ RSpec.describe Ingestion::Adapters::Cratesio do
       expect(versions.find { |v| v[:number] == "0.45.0-rc.1" }).to include(
         registry_ref: "3002", package_ref: "3", prerelease: true, latest: false, yanked: true
       )
+      # The dump renders created_at as a Postgres timestamptz: fractional
+      # seconds and its own +00 offset, not a naive local timestamp.
       expect(versions.find { |v| v[:number] == "1.0.228" }).to include(
         prerelease: false, latest: true, yanked: false,
-        published_at: Time.utc(2025, 9, 27, 16, 51, 35)
+        published_at: Time.utc(2025, 9, 27, 16, 51, 35, 111_111)
       )
     end
 
@@ -66,6 +71,21 @@ RSpec.describe Ingestion::Adapters::Cratesio do
 
     it "floors provenance checks at the trustpub_data migration" do
       expect(adapter.provenance_available_since).to eq(Time.utc(2025, 7, 4))
+    end
+
+    # A naive timestamp would be read in the host's zone, so seeds built on
+    # two machines would disagree. Refuse it rather than guess.
+    it "refuses a seed timestamp with no UTC offset" do
+      Dir.mktmpdir do |dir|
+        Zlib::GzipWriter.open(File.join(dir, "tracked_versions.tsv.gz")) do |gz|
+          gz.puts %w[id number crate_id created_at prerelease latest yanked].join("\t")
+          gz.puts ["1", "1.0.0", "7", "2026-02-02 08:00:00", "false", "true", "false"].join("\t")
+        end
+        naive = described_class.new(seed_dir: dir, http_client: client)
+
+        expect { naive.each_seed_version.to_a }
+          .to raise_error(ArgumentError, /lacks a UTC offset/)
+      end
     end
   end
 
