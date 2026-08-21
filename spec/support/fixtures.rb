@@ -11,8 +11,10 @@ module FixtureHelpers
     FIXTURES_DIR.join(*segments).to_s
   end
 
+  # Recorded registry responses are UTF-8; reading them under a C or POSIX
+  # locale would otherwise fail on the first non-ASCII byte.
   def json_fixture(name)
-    JSON.parse(File.read(fixture_path("api", name)))
+    JSON.parse(File.read(fixture_path("api", name), encoding: "UTF-8"))
   end
 
   # A stand-in for Ingestion::HTTPClient backed by canned responses.
