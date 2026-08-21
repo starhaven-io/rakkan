@@ -1,7 +1,8 @@
 import type { APIRoute } from 'astro';
 
 export const prerender = false;
-import { allTracked, getDb, registryByName } from '../lib/d1.ts';
+import { getDb } from '../lib/db.ts';
+import { allTracked, registryByName } from '../lib/d1.ts';
 
 export const GET: APIRoute = async (context) => {
   const origin = (context.site?.href ?? 'https://rakkan.dev/').replace(/\/$/, '');

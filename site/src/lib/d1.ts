@@ -1,4 +1,3 @@
-import { env } from 'cloudflare:workers';
 import { escapeLike } from './format.ts';
 
 // Minimal D1 surface (avoids a @cloudflare/workers-types dependency). The
@@ -11,10 +10,6 @@ export interface D1PreparedStatement {
 }
 export interface D1 {
   prepare(sql: string): D1PreparedStatement;
-}
-
-export function getDb(): D1 {
-  return (env as unknown as { DB: D1 }).DB;
 }
 
 export interface Registry {
@@ -82,7 +77,7 @@ export async function snapshotSeries(db: D1, registryId: number): Promise<Snapsh
   const { results } = await db
     .prepare(
       `SELECT taken_on, tracked_packages, provenant_packages, tracked_versions, provenant_versions
-         FROM adoption_snapshots WHERE registry_id = ? ORDER BY taken_on ASC`,
+         FROM adoption_snapshots WHERE registry_id = ? ORDER BY taken_on DESC`,
     )
     .bind(registryId)
     .all<Snapshot>();
