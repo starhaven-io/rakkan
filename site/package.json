@@ -19,7 +19,7 @@
     "astro": "^7.2.0"
   },
   "devDependencies": {
-    "wrangler": "4.122.0"
+    "wrangler": "4.123.0"
   },
   "allowScripts": {
     "esbuild": false,
