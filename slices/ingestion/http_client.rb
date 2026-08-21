@@ -138,7 +138,9 @@ module Ingestion
       path = cache_path(url, accept:)
       return nil unless File.exist?(path)
 
-      envelope = JSON.parse(File.read(path))
+      # Written as UTF-8 by write_cache, so read it back as UTF-8 rather than
+      # as whatever the process locale happens to be.
+      envelope = JSON.parse(File.read(path, encoding: "UTF-8"))
       return nil if ttl && (Time.now - Time.parse(envelope["fetched_at"])) > ttl
 
       { json: JSON.parse(envelope["body"]) }

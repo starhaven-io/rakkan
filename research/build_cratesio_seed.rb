@@ -25,7 +25,7 @@ module CratesioSeedBuilder
     raise ArgumentError, "limit must be positive" unless limit.positive?
 
     data_dir = File.join(dump_dir, "data")
-    metadata = JSON.parse(File.read(File.join(dump_dir, "metadata.json")))
+    metadata = JSON.parse(File.read(File.join(dump_dir, "metadata.json"), encoding: "UTF-8"))
     downloads = downloads_by_crate(File.join(data_dir, "crate_downloads.csv"))
     tracked = top_crates(File.join(data_dir, "crates.csv"), downloads, limit)
     tracked_ids = tracked.to_h { |crate| [crate.fetch("id"), true] }
@@ -47,13 +47,13 @@ module CratesioSeedBuilder
   end
 
   def downloads_by_crate(path)
-    CSV.foreach(path, headers: true).to_h do |row|
+    CSV.foreach(path, headers: true, encoding: "UTF-8").to_h do |row|
       [row.fetch("crate_id"), Integer(row.fetch("downloads"))]
     end
   end
 
   def top_crates(path, downloads, limit)
-    crates = CSV.foreach(path, headers: true).filter_map do |row|
+    crates = CSV.foreach(path, headers: true, encoding: "UTF-8").filter_map do |row|
       crate_downloads = downloads[row.fetch("id")]
       next unless crate_downloads
 
@@ -63,7 +63,7 @@ module CratesioSeedBuilder
   end
 
   def default_versions_by_crate(path, tracked_ids)
-    CSV.foreach(path, headers: true).filter_map do |row|
+    CSV.foreach(path, headers: true, encoding: "UTF-8").filter_map do |row|
       crate_id = row.fetch("crate_id")
       [crate_id, row.fetch("version_id")] if tracked_ids[crate_id]
     end.to_h
@@ -83,7 +83,7 @@ module CratesioSeedBuilder
   end
 
   def write_tracked_packages(seed_dir, tracked)
-    File.open(File.join(seed_dir, "top_1000.tsv"), "w") do |file|
+    File.open(File.join(seed_dir, "top_1000.tsv"), "w", encoding: "UTF-8") do |file|
       file.puts %w[rank crate_id name downloads].join("\t")
       tracked.each_with_index do |crate, index|
         file.puts [index + 1, crate.fetch("id"), crate.fetch("name"), crate.fetch("downloads")].join("\t")
@@ -93,10 +93,10 @@ module CratesioSeedBuilder
 
   def write_versions(seed_dir, path, tracked_ids, default_versions)
     count = 0
-    Zlib::GzipWriter.open(File.join(seed_dir, "tracked_versions.tsv.gz")) do |gzip|
+    Zlib::GzipWriter.open(File.join(seed_dir, "tracked_versions.tsv.gz"), external_encoding: "UTF-8") do |gzip|
       gzip.mtime = 0
       gzip.puts %w[id number crate_id created_at prerelease latest yanked].join("\t")
-      CSV.foreach(path, headers: true) do |row|
+      CSV.foreach(path, headers: true, encoding: "UTF-8") do |row|
         crate_id = row.fetch("crate_id")
         next unless tracked_ids[crate_id]
 

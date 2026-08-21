@@ -27,7 +27,7 @@ module Ingestion
         manifest = File.join(@seed_dir, "manifest.json")
         return nil unless File.exist?(manifest)
 
-        Time.parse(JSON.parse(File.read(manifest)).fetch("dump_taken_at"))
+        Time.parse(JSON.parse(File.read(manifest, encoding: "UTF-8")).fetch("dump_taken_at"))
       end
 
       # The RubyGems dump includes the complete attestations table at the same
@@ -128,16 +128,18 @@ module Ingestion
 
       # Read the header off the handle rather than Enumerable#drop, which
       # returns an Array and so would hold the whole decompressed seed in
-      # memory before the first row reaches the chunked upsert.
+      # memory before the first row reaches the chunked upsert. Seed files are
+      # UTF-8 because their dumps are; say so rather than inherit whatever
+      # locale the process happens to run under.
       def each_tsv_row(path)
-        File.open(path) do |file|
+        File.open(path, encoding: "UTF-8") do |file|
           file.gets
           file.each_line { |line| yield(line.chomp.split("\t", -1)) }
         end
       end
 
       def each_gzip_tsv_row(path)
-        Zlib::GzipReader.open(path) do |gz|
+        Zlib::GzipReader.open(path, external_encoding: "UTF-8") do |gz|
           gz.gets
           gz.each_line { |line| yield(line.chomp.split("\t", -1)) }
         end
