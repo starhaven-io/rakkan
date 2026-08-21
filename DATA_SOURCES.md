@@ -136,18 +136,32 @@ is not on the primary path.
   The adapter therefore maps only the small provider/repository/run/SHA shape
   evidenced in the recorded samples and does not persist the raw object as a
   stable contract.
-- Daily database dump confirmed real: `static.crates.io/db-dump.tar.gz`
-  (redirects to cloudfront; 1.72 GB, Last-Modified 2026-08-14). Contents not
-  yet inspected; whether it includes `trustpub_data` is an open question
-  for the crates.io adapter.
+- The daily database dump at `static.crates.io/db-dump.tar.gz` was inspected
+  on 2026-08-20. Its metadata identifies the cut time and crates.io source
+  commit; `crate_downloads.csv`, `crates.csv`, `default_versions.csv`, and
+  `versions.csv` are sufficient to reproduce a total-download top 1,000 and
+  its version history. The export does not include `trustpub_data`, trusted
+  publisher configuration, or token records, so it is not evidence that an
+  unattested version was checked for provenance.
 - The [official data-access policy](https://crates.io/data-access) prefers the
   index or daily dump for bulk access and caps API clients at one request per
   second with an identifying User-Agent. `Ingestion::HTTPClient` enforces that
   host-specific interval; provenance checks bypass cache reads so a later
   trusted publication cannot remain hidden behind a cached negative response.
-- The implemented adapter is provenance-only. Seeding, ranking, and discovery
-  stay disabled until the dump is inspected and distilled into offline seed
-  fixtures; a top-1,000 backfill must not become per-version API crawling.
+- `research/build_cratesio_seed.rb` performs the deterministic ranking and
+  version distillation, and the adapter streams that output. What is still
+  missing is the committed seed itself; the dump is daily, so re-seeding is
+  also this registry's discovery path and no live feed walk is needed.
+- A top-1,000 backfill is bounded by publish date rather than by crawling
+  every version. `trustpub_data` arrived in the
+  `2025-07-04-102806_add_trustpub_data_columns` migration and records how a
+  version was published, so it is never backfilled: a version created before
+  that date provably carries none, and settling it needs no request. On a
+  RubyGems-sized tracked set (106,150 versions) that is the difference between
+  roughly 30 hours of crawling at the documented 1 req/s and a few hours.
+- GitLab trusted publishing followed in the
+  `2025-09-24-104418_add_trustpub_configs_gitlab` migration, so `provider` is
+  not always `github` in live data and the adapter maps both.
 
 ## PyPI
 
@@ -166,10 +180,23 @@ is not on the primary path.
   not independently re-verify the signatures.
 - PyPI's public BigQuery [`file_downloads`
   dataset](https://docs.pypi.org/api/bigquery/) is the official bulk source for
-  a download-ranked tracked set. The [API
-  guidance](https://docs.pypi.org/api/) prefers RSS for new-package and release
-  polling. The seed query, ranking window, and RSS cursor semantics still need
-  to be fixed and recorded before ingestion is enabled.
+  a download-ranked tracked set; `distribution_metadata` is the corresponding
+  immutable release-metadata table. The JSON [Index
+  API](https://docs.pypi.org/api/index-api/) provides every available file,
+  version, upload time, and yank state for one project.
+- `research/pypi_top_packages.sql` fixes the tracked-set definition at the top
+  1,000 normalized projects by pip downloads over the 30 complete UTC days
+  ending at an explicit `as_of` date. Restricting the installer to pip excludes
+  known mirror traffic such as bandersnatch; the end-exclusive parameter and
+  deterministic name tie-break make the ranking reproducible rather than
+  dependent on query run time.
+- The [API guidance](https://docs.pypi.org/api/) prefers RSS for periodic
+  release polling, but the global updates feed is a bounded latest-items view,
+  not a durable cursor: [Warehouse limits it to 100
+  releases](https://github.com/pypi/warehouse/blob/main/warehouse/rss/views.py),
+  and a live 2026-08-20 observation covered only about 18 minutes. It cannot
+  safely bridge a daily ingestion interval by itself. A durable discovery
+  cursor still needs to be fixed and recorded before ingestion is enabled.
 - The implemented adapter is therefore provenance-only. Its per-file Integrity
   API calls are suitable for fresh releases after discovery, not for a blind
   historical backfill across every release of the top 1,000 projects.
