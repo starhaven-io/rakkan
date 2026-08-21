@@ -5,8 +5,10 @@ module Ingestion
     # Ask the registry for provenance on versions we have not checked yet
     # (or not recently). Resumable by construction: each version's row is
     # updated as soon as it is checked, so an interrupted run just continues
-    # where it stopped. `limit` caps the number of versions checked per run;
-    # registries with per-file provenance may make several requests per version.
+    # where it stopped. `limit` caps the versions put to the live API per run;
+    # registries with per-file provenance may make several requests per
+    # version. Versions published before the registry could record provenance
+    # are settled in bulk outside that cap, since they cost no requests.
     # Convergent with registry state: checks bypass the response cache, and
     # a negative answer clears any previously stored provenance.
     class RefreshProvenance < Ingestion::Operation
@@ -27,10 +29,12 @@ module Ingestion
         return { error: "unknown registry #{adapter.registry_slug}" } unless registry
 
         now = Time.now.utc
+        available_since = adapter.provenance_available_since
+        settled = settle_predating(registry.id, available_since, now)
         checked = 0
         found = 0
 
-        candidates(registry.id, stale_after, limit).each do |row|
+        candidates(registry.id, stale_after, limit, available_since).each do |row|
           provenance = adapter.fetch_provenance(
             name: row[:name], number: row[:number], platform: row[:platform]
           )
@@ -42,15 +46,30 @@ module Ingestion
         end
 
         recompute_first_provenant_at(registry.id)
-        { checked:, provenant: found }
+        { checked:, provenant: found, settled: }
       end
 
       private
 
+      # Versions published before the registry could record provenance at all
+      # are settled in one statement rather than one request each. Spending a
+      # run's live budget on them would be waste: the mechanism did not exist,
+      # so the answer is already known. A null published_at is left alone --
+      # an unknown publish time cannot rule provenance out.
+      def settle_predating(registry_id, available_since, now)
+        return 0 unless available_since
+
+        tracked_ids = packages.dataset.where(registry_id:, tracked: true).select(:id)
+        package_versions.dataset
+                        .where(package_id: tracked_ids, provenance_checked_at: nil)
+                        .where(Sequel[:published_at] < available_since)
+                        .update(**NO_PROVENANCE, provenance_checked_at: now, updated_at: now)
+      end
+
       # Unchecked (or stale) versions of this registry's tracked packages,
       # newest first so fresh releases get provenance quickly. Sequel join
       # because the package name lives on packages.
-      def candidates(registry_id, stale_after, limit)
+      def candidates(registry_id, stale_after, limit, available_since = nil)
         ds = package_versions.dataset
                              .join(:packages, id: :package_id)
                              .where(Sequel[:packages][:registry_id] => registry_id)
@@ -63,6 +82,14 @@ module Ingestion
                              )
                              .order(Sequel.desc(Sequel[:package_versions][:published_at]))
                              .limit(limit)
+        if available_since
+          ds = ds.where(
+            Sequel.|(
+              Sequel[:package_versions][:published_at] >= available_since,
+              { Sequel[:package_versions][:published_at] => nil }
+            )
+          )
+        end
         if stale_after
           ds.where do
             (Sequel[:package_versions][:provenance_checked_at] =~ nil) |

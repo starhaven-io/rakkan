@@ -16,7 +16,7 @@ namespace :ingest do
     puts Ingestion::Slice["operations.discover_new_versions"].call.inspect
   end
 
-  desc "Check provenance for unchecked versions (live API; LIMIT caps versions)"
+  desc "Check provenance for unchecked versions (live API; LIMIT caps live checks)"
   task :refresh, [:limit] do |_t, args|
     require "hanami/boot"
     limit = (args[:limit] || 50).to_i

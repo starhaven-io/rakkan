@@ -1,0 +1,4 @@
+rank	crate_id	name	downloads
+1	1	serde	405686799
+2	2	rand	312044118
+3	3	cargo-semver-checks	558322
