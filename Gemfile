@@ -13,6 +13,7 @@ gem "rake"
 gem "sqlite3"
 
 group :development, :test do
+  gem "csv"
   gem "dotenv"
   # Syntax highlighting SQL logs
   gem "rouge"

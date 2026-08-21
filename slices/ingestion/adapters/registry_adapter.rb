@@ -35,9 +35,20 @@ module Ingestion
       # (as above) or nil when the registry reports none.
       def fetch_provenance(name:, number:, platform:) = raise NotImplementedError
 
-      # When the seed data was authoritative (nil when unknown). Versions
-      # seeded without provenance are considered checked as of this time.
+      # When the seed's package/version data was authoritative (nil when
+      # unknown). Discovery can advance its cursor to this time.
       def seed_as_of = nil
+
+      # When the seed's provenance data was authoritative (nil when the seed
+      # did not observe provenance). Versions seeded without provenance are
+      # considered checked only when this timestamp is present.
+      def provenance_seed_as_of = nil
+
+      # Earliest publish time at which this registry could record provenance
+      # (nil when it always could, or when the date is unknown). Versions
+      # published earlier are settled without a live request: the mechanism
+      # did not exist, so "none" is an observation rather than an assumption.
+      def provenance_available_since = nil
 
       # Live: enumerate versions published between two times. Returns
       # { entries:, drained:, pages: } where entries are hashes

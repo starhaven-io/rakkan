@@ -23,7 +23,12 @@ module Ingestion
         # adapter fails at the interface boundary without leaving registry data.
         tracked_packages = adapter.each_tracked_package
         seed_versions = adapter.each_seed_version
-        seed_attestations = adapter.each_seed_attestation
+        seed_attestations = adapter.each_seed_attestation.to_enum
+        seed_at = adapter.seed_as_of
+        provenance_seed_at = adapter.provenance_seed_as_of
+        if provenance_seed_at.nil? && stream_has_items?(seed_attestations)
+          raise ArgumentError, "seed attestations require provenance_seed_as_of"
+        end
 
         now = Time.now.utc
         registry = registry_repo.find_or_create(
@@ -35,10 +40,10 @@ module Ingestion
         package_count = upsert_packages(registry.id, tracked_packages, now)
         ref_to_id = packages.where(registry_id: registry.id).select(:id, :registry_ref).to_a
                             .to_h { |p| [p[:registry_ref], p[:id]] }
-        version_count = upsert_versions(ref_to_id, seed_versions, adapter, now)
-        attested_count = apply_attestations(registry.id, seed_attestations, adapter, now)
+        version_count = upsert_versions(ref_to_id, seed_versions, provenance_seed_at, now)
+        attested_count = apply_attestations(registry.id, seed_attestations, provenance_seed_at, now)
         recompute_first_provenant_at(registry.id)
-        advance_feed_cursor(registry, adapter, now)
+        advance_feed_cursor(registry, seed_at, now)
 
         { packages: package_count, versions: version_count, attested_versions: attested_count }
       end
@@ -70,17 +75,13 @@ module Ingestion
         rows.size
       end
 
-      def upsert_versions(ref_to_id, seed_versions, adapter, now)
+      def upsert_versions(ref_to_id, seed_versions, provenance_seed_at, now)
         count = 0
-        # The dump's attestations table is authoritative at dump time, so
-        # every seeded version starts out "checked as of the dump" rather
-        # than "never checked"; only genuinely new versions need live calls.
-        checked_at = adapter.seed_as_of
         seed_versions.each_slice(CHUNK) do |chunk|
           rows = chunk.filter_map do |v|
             package_id = ref_to_id[v[:package_ref]] or next
             v.except(:package_ref).merge(
-              package_id:, provenance_checked_at: checked_at,
+              package_id:, provenance_checked_at: provenance_seed_at,
               created_at: now, updated_at: now
             )
           end
@@ -99,10 +100,7 @@ module Ingestion
         count
       end
 
-      def apply_attestations(registry_id, seed_attestations, adapter, now)
-        # Stamp with the dump's own timestamp, and never regress a newer
-        # observation (e.g. a live refresh that ran after the dump was cut).
-        seed_at = adapter.seed_as_of || now
+      def apply_attestations(registry_id, seed_attestations, provenance_seed_at, now)
         registry_package_ids = packages.dataset.where(registry_id:).select(:id)
         count = 0
         seed_attestations.each do |att|
@@ -110,9 +108,13 @@ module Ingestion
                                    .where(registry_ref: att[:version_ref], package_id: registry_package_ids)
                                    .where(
                                      Sequel.|({ provenance_checked_at: nil },
-                                              Sequel[:provenance_checked_at] <= seed_at)
+                                              Sequel[:provenance_checked_at] <= provenance_seed_at)
                                    )
-                                   .update(**att[:provenance], provenance_checked_at: seed_at, updated_at: now)
+                                   .update(
+                                     **att[:provenance],
+                                     provenance_checked_at: provenance_seed_at,
+                                     updated_at: now
+                                   )
         end
         count
       end
@@ -121,14 +123,20 @@ module Ingestion
       # establishes the feed cursor too. One conditional UPDATE against the
       # stored value (not a struct read from before the lengthy seed), so a
       # concurrent discovery run can never be regressed to the dump time.
-      def advance_feed_cursor(registry, adapter, now)
-        seed_at = adapter.seed_as_of
+      def advance_feed_cursor(registry, seed_at, now)
         return unless seed_at
 
         registries.dataset
                   .where(id: registry.id)
                   .where(Sequel.|({ feed_synced_at: nil }, Sequel[:feed_synced_at] < seed_at))
                   .update(feed_synced_at: seed_at, updated_at: now)
+      end
+
+      def stream_has_items?(stream)
+        stream.peek
+        true
+      rescue StopIteration
+        false
       end
 
       def recompute_first_provenant_at(registry_id)

@@ -1,15 +1,21 @@
 # frozen_string_literal: true
 
 class FakeProvenanceAdapter
-  def initialize(slug: "rubygems", responses: {})
+  attr_reader :requested, :provenance_available_since
+
+  def initialize(slug: "rubygems", responses: {}, provenance_available_since: nil)
     @slug = slug
     @responses = responses
+    @provenance_available_since = provenance_available_since
+    @requested = []
   end
 
   def registry_slug = @slug
 
   def fetch_provenance(name:, number:, platform:)
-    @responses.fetch("#{name}-#{number}-#{platform}", nil)
+    key = "#{name}-#{number}-#{platform}"
+    @requested << key
+    @responses.fetch(key, nil)
   end
 end
 
@@ -32,7 +38,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
     result = operation.call(adapter:)
 
     expect(result).to be_success
-    expect(result.value!).to eq(checked: 2, provenant: 1)
+    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0)
     expect(versions.by_pk(attested).one[:provenance_kind]).to eq("sigstore_attestation")
     expect(versions.by_pk(plain).one).to include(provenance_kind: nil)
     expect(versions.by_pk(plain).one[:provenance_checked_at]).not_to be_nil
@@ -64,8 +70,27 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(adapter:)
 
-    expect(result.value!).to eq(checked: 0, provenant: 0)
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0)
     expect(versions.by_pk(other_version).one[:provenance_checked_at]).to be_nil
+  end
+
+  it "settles versions predating the registry's provenance support without asking it" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "serde")
+    old = create_version!(pkg, number: "1.0.197", published_at: Time.utc(2024, 3, 1))
+    recent = create_version!(pkg, number: "1.0.228", published_at: Time.utc(2025, 9, 27))
+    unknown = create_version!(pkg, number: "0.0.1", published_at: nil)
+    adapter = FakeProvenanceAdapter.new(provenance_available_since: Time.utc(2025, 7, 4))
+
+    result = operation.call(adapter:)
+
+    expect(result.value!).to eq(checked: 2, provenant: 0, settled: 1)
+    # The old version is recorded as observed, not left unchecked, but no
+    # request was spent on it. An unknown publish time still gets asked.
+    expect(versions.by_pk(old).one[:provenance_checked_at]).not_to be_nil
+    expect(adapter.requested).to contain_exactly("serde-1.0.228-ruby", "serde-0.0.1-ruby")
+    expect(versions.by_pk(recent).one[:provenance_checked_at]).not_to be_nil
+    expect(versions.by_pk(unknown).one[:provenance_checked_at]).not_to be_nil
   end
 
   it "fails cleanly for an unknown registry" do

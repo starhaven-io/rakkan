@@ -2,7 +2,8 @@
 export const prerender = false;
 
 import Base from '../layouts/Base.astro';
-import { allTracked, getDb, registryByName } from '../lib/d1.ts';
+import { getDb } from '../lib/db.ts';
+import { allTracked, registryByName } from '../lib/d1.ts';
 import { formatCount, packageNoun, shortDate } from '../lib/format.ts';
 
 const db = getDb();

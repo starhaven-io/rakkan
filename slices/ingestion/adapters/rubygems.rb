@@ -23,14 +23,16 @@ module Ingestion
       def display_name = "RubyGems.org"
       def registry_url = "https://rubygems.org"
 
-      # When the seed data was authoritative: absence from the dump's
-      # attestations table at this time means "checked, none found".
       def seed_as_of
         manifest = File.join(@seed_dir, "manifest.json")
         return nil unless File.exist?(manifest)
 
         Time.parse(JSON.parse(File.read(manifest)).fetch("dump_taken_at"))
       end
+
+      # The RubyGems dump includes the complete attestations table at the same
+      # cut time as its package and version data.
+      def provenance_seed_as_of = seed_as_of
 
       def each_tracked_package
         return enum_for(:each_tracked_package) unless block_given?
@@ -124,13 +126,20 @@ module Ingestion
 
       private
 
+      # Read the header off the handle rather than Enumerable#drop, which
+      # returns an Array and so would hold the whole decompressed seed in
+      # memory before the first row reaches the chunked upsert.
       def each_tsv_row(path)
-        File.foreach(path).drop(1).each { |line| yield(line.chomp.split("\t", -1)) }
+        File.open(path) do |file|
+          file.gets
+          file.each_line { |line| yield(line.chomp.split("\t", -1)) }
+        end
       end
 
       def each_gzip_tsv_row(path)
         Zlib::GzipReader.open(path) do |gz|
-          gz.each_line.drop(1).each { |line| yield(line.chomp.split("\t", -1)) }
+          gz.gets
+          gz.each_line { |line| yield(line.chomp.split("\t", -1)) }
         end
       end
 

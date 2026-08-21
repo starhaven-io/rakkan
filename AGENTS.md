@@ -4,10 +4,11 @@ rakkan is a public tracker for trusted publishing adoption across package
 registries: which packages publish with verifiable provenance, adoption share
 among the most-downloaded packages, and trends over time. RubyGems.org is the
 first production registry; the schema and ingestion pipeline are
-registry-agnostic. crates.io and PyPI provenance adapters are present; their
-bulk tracked-set seeds and release discovery are the next phase. Prefer reading
-the Hanami v3.0 guides (hanakai.org) or installed gem source over assuming
-framework APIs.
+registry-agnostic. crates.io reads provenance and streams a seed built from
+the daily dump, but its seed output is not committed yet; PyPI is still
+provenance-only and needs both a tracked set and a durable discovery cursor.
+Prefer reading the Hanami v3.0 guides (hanakai.org) or installed gem source
+over assuming framework APIs.
 
 ## Project overview
 

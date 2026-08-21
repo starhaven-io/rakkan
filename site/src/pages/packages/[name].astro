@@ -2,7 +2,8 @@
 export const prerender = false;
 
 import Base from '../../layouts/Base.astro';
-import { getDb, packageByName, registryByName, versionsOf } from '../../lib/d1.ts';
+import { getDb } from '../../lib/db.ts';
+import { packageByName, registryByName, versionsOf } from '../../lib/d1.ts';
 import {
   formatCount,
   packageNoun,

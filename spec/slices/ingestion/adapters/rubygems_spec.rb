@@ -42,8 +42,9 @@ RSpec.describe Ingestion::Adapters::Rubygems do
       end
     end
 
-    it "reports when the seed data was authoritative" do
+    it "reports when package, version, and provenance seed data were authoritative" do
       expect(adapter.seed_as_of).to eq(Time.utc(2026, 8, 10, 21, 21, 1))
+      expect(adapter.provenance_seed_as_of).to eq(adapter.seed_as_of)
     end
   end
 
