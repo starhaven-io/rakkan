@@ -1,13 +1,21 @@
 # Seed data
 
-These files are compact excerpts derived from the RubyGems.org public
-PostgreSQL data dumps (https://rubygems.org/pages/data); `manifest.json`
-records the exact dump each dataset was distilled from. They are included
-so the tracker can be set up and reproduced without downloading and
-processing a ~650 MB dump.
+These files are compact excerpts derived from the public data dumps the
+registries publish. They are included so the tracker can be set up and
+reproduced without downloading and processing the full dumps; each
+directory's `manifest.json` records the exact dump its dataset was
+distilled from.
+
+- `rubygems/` — from the RubyGems.org weekly PostgreSQL dump
+  (https://rubygems.org/pages/data), around 650 MB. The dump includes the
+  attestations table, so provenance is seeded along with the versions.
+- `cratesio/` — from the crates.io daily database dump
+  (https://static.crates.io/db-dump.tar.gz), around 1.8 GB. That dump
+  carries no trusted-publishing metadata, so its versions are seeded
+  unchecked and their provenance is established from the API instead.
 
 Rights in the underlying registry records remain with their respective
-owners and are governed by the RubyGems.org Terms of Service; rakkan does
+owners and are governed by each registry's terms of service; rakkan does
 not claim or grant any separate license over that data. The scripts that
 produce these files (under `research/`) are covered by the repository's
 code license.

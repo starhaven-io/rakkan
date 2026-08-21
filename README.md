@@ -12,11 +12,11 @@ which packages publish with verifiable provenance, what share of the
 most-downloaded packages have adopted it, and how that changes over time.
 
 RubyGems.org is the first production registry. The schema and ingestion
-pipeline are registry-agnostic: crates.io reads provenance and streams a seed
-built from the daily dump, though that seed is not committed yet, and PyPI
-reads provenance while its tracked set and discovery cursor remain the next
-implementation phase. The ingestion engine is built with [Hanami
-3.0](https://hanakai.org/hanami).
+pipeline are registry-agnostic: crates.io carries its tracked set in
+`seed/cratesio/` and reads provenance from the API, with its provenance
+backfill still to run, and PyPI reads provenance while its tracked set and
+discovery cursor remain the next implementation phase. The ingestion engine
+is built with [Hanami 3.0](https://hanakai.org/hanami).
 
 Where the provenance signal actually lives, with recorded evidence, is
 documented in [DATA_SOURCES.md](DATA_SOURCES.md). Headline: for RubyGems it

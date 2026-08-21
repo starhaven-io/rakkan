@@ -17,6 +17,12 @@ RSpec.describe CratesioSeedBuilder do
 
       expect(first).to eq(packages: 2, versions: 3)
       expect(second).to eq(first)
+      # The guarantee that travels is the decompressed content: gzip records a
+      # platform code and the compressor is not pinned, so identical container
+      # bytes hold only within one toolchain. Assert both, so a same-toolchain
+      # regression is still caught without claiming portable byte-identity.
+      expect(gzip_lines(File.join(first_seed, "tracked_versions.tsv.gz")))
+        .to eq(gzip_lines(File.join(second_seed, "tracked_versions.tsv.gz")))
       expect(File.binread(File.join(first_seed, "tracked_versions.tsv.gz")))
         .to eq(File.binread(File.join(second_seed, "tracked_versions.tsv.gz")))
       expect(File.readlines(File.join(first_seed, "top_1000.tsv"), chomp: true)).to eq(

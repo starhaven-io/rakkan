@@ -24,6 +24,10 @@ module Ingestion
       # metadata and needs no API call to establish it.
       PROVENANCE_AVAILABLE_SINCE = Time.utc(2025, 7, 4)
 
+      # created_at is rendered from a Postgres timestamptz and always carries
+      # its own offset.
+      OFFSET_SUFFIX = /(?:Z|[+-]\d{2}(?::?\d{2})?)\z/
+
       # trustpub_data is tagged by provider and names its repository and run
       # fields per variant: GitHub carries repository/run_id, GitLab carries
       # project_path/job_id (crates_io_database/src/models/trustpub/data.rs).
@@ -144,8 +148,15 @@ module Ingestion
         end
       end
 
+      # Refuse a value without an offset instead of parsing it: Time.parse
+      # would read a naive timestamp in the host's zone, so an upstream format
+      # change would quietly yield seeds that differ by the machine that built
+      # them, and could move a version across the provenance floor.
       def parse_utc(value)
-        Time.parse("#{value} UTC")
+        raise ArgumentError, "crates.io timestamp lacks a UTC offset: #{value.inspect}" \
+          unless value.match?(OFFSET_SUFFIX)
+
+        Time.parse(value).utc
       end
 
       def repository_url(provider, repository)
