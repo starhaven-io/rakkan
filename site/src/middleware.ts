@@ -1,4 +1,7 @@
 import { defineMiddleware } from 'astro:middleware';
+import { GenerationTracker, isCacheableRequest, serveVersionedPage } from './lib/cache.ts';
+import { exportGeneratedAt } from './lib/d1.ts';
+import { getDb } from './lib/db.ts';
 
 // Cloudflare applies public/_headers only to static assets, but every rakkan
 // route is SSR, so responses would ship without these headers. Set-if-absent
@@ -21,13 +24,10 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 // The heavy read-only pages (overview, 1,000-row index, per-package version
-// history, sitemap) are edge-cached on the data-refresh cadence so anonymous
-// traffic cannot ride every request straight to D1. Search (query string)
-// and anything non-GET stay uncached. The Cache API is absent in plain node
-// contexts, so everything degrades to pass-through outside the Workers
-// runtime and its local proxies.
-const CACHEABLE_PATH = /^\/$|^\/packages(\/[^/]+)?$|^\/sitemap\.xml$/;
-const CACHE_CONTROL = 'public, max-age=300, s-maxage=1800';
+// history, sitemap) are edge-cached by export generation. Cacheable requests
+// read the one-row generation marker; only misses run the heavier page queries.
+// Search (query string) and anything non-GET stay uncached. The Cache API is
+// absent in plain node contexts, so those contexts degrade to pass-through.
 
 function edgeCache(): Cache | undefined {
   // Dev serves fresh renders (the platform proxy has a working Cache API,
@@ -36,31 +36,28 @@ function edgeCache(): Cache | undefined {
   return (globalThis as { caches?: { default?: Cache } }).caches?.default;
 }
 
+// A warm isolate can keep serving its last edge generation through a transient
+// D1 lookup failure. A cold isolate has no generation to guess from.
+const generationTracker = new GenerationTracker();
+
 export const onRequest = defineMiddleware(async (context, next) => {
-  const url = new URL(context.request.url);
-  const cacheable =
-    context.request.method === 'GET' && url.search === '' && CACHEABLE_PATH.test(url.pathname);
+  const cacheable = isCacheableRequest(context.request.method, context.request.url);
   const cache = cacheable ? edgeCache() : undefined;
 
-  if (cache) {
-    const hit = await cache.match(context.request.url);
-    if (hit) return hit;
-  }
+  const render = async () => {
+    const response = await next();
 
-  const response = await next();
-
-  for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
-    if (!response.headers.has(name)) {
-      response.headers.set(name, value);
+    for (const [name, value] of Object.entries(SECURITY_HEADERS)) {
+      if (!response.headers.has(name)) {
+        response.headers.set(name, value);
+      }
     }
-  }
 
-  if (cache && response.status === 200) {
-    if (!response.headers.has('cache-control')) {
-      response.headers.set('cache-control', CACHE_CONTROL);
-    }
-    await cache.put(context.request.url, response.clone());
-  }
+    return response;
+  };
 
-  return response;
+  if (!cache) return render();
+
+  const generatedAt = await generationTracker.current(() => exportGeneratedAt(getDb()));
+  return serveVersionedPage(cache, context.request.url, generatedAt, render);
 });
