@@ -27,16 +27,20 @@ discover registry="rubygems":
 refresh n="50" registry="rubygems":
     bundle exec rake "ingest:refresh[{{ n }},{{ registry }}]"
 
-# Record today's adoption snapshot for a registry
+# Record the current adoption snapshot for a registry
 snapshot registry="rubygems":
     bundle exec rake "snapshot:take[{{ registry }}]"
+
+# Align RubyGems observations to the registry's weekly dump dates
+normalize-snapshots database="db/rakkan.sqlite":
+    bash scripts/normalize-rubygems-weekly-snapshots.sh "{{ database }}"
 
 # Export the database for the Workers site's D1 (db/d1_export.sql)
 export-d1:
     bundle exec rake export:d1
 
 # Load the export into the site's local D1 (requires `just install-site`)
-site-db: export-d1
+site-db: normalize-snapshots export-d1
     cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql
 
 # Run

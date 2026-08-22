@@ -71,12 +71,13 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
     newest_seen = Time.utc(2026, 8, 13, 6)
     adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
                                     { entries: [entry("psych", "1.0.0", newest_seen)],
-                                      drained: false, pages: 20 }
+                                      drained: false, pages: 500 }
                                   ])
 
     result = operation.call(from: Time.utc(2026, 8, 13), to: Time.utc(2026, 8, 14), adapter:)
 
     expect(result.value!).to include(drained: false, synced_through: newest_seen)
+    expect(adapter.calls.first[:max_pages]).to eq(500)
     expect(registries.by_pk(registry.id).one[:feed_synced_at].to_time).to eq(newest_seen)
   end
 

@@ -5,6 +5,7 @@
 
 module IngestionTaskSupport
   class UnsupportedOperation < StandardError; end
+  class IncompleteDiscovery < StandardError; end
 
   UNAVAILABLE_HINTS = {
     ["ingest:seed", "pypi"] => "add a tracked seed before selecting it",
@@ -30,7 +31,9 @@ module IngestionTaskSupport
     raise_unsupported(task_name, adapter, unsupported_key) if task_name == "ingest:discover" &&
                                                               !implemented?(adapter, :new_versions)
 
-    Ingestion::Slice[operation_key].call(adapter:, **)
+    result = Ingestion::Slice[operation_key].call(adapter:, **)
+    raise_incomplete_discovery(task_name, result)
+    result
   rescue NotImplementedError
     raise if task_name == "ingest:discover" && implemented?(adapter, :new_versions)
     raise unless UNAVAILABLE_HINTS.key?(unsupported_key)
@@ -40,6 +43,17 @@ module IngestionTaskSupport
 
   def implemented?(adapter, method)
     adapter.method(method).owner != Ingestion::Adapters::RegistryAdapter
+  end
+
+  def raise_incomplete_discovery(task_name, result)
+    return unless task_name == "ingest:discover" && result.respond_to?(:value!)
+
+    payload = result.value!
+    return unless payload.is_a?(Hash) && payload[:drained] == false
+
+    raise IncompleteDiscovery,
+          "ingest:discover exhausted its page budget at #{payload[:synced_through]}; " \
+          "rerun to resume from the persisted cursor"
   end
 
   def raise_unsupported(task_name, adapter, unsupported_key)

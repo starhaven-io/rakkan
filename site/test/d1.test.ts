@@ -6,14 +6,14 @@ import { snapshotSeries, type D1, type D1PreparedStatement, type Snapshot } from
 test('snapshotSeries returns the newest observation first', async () => {
   const rows: Snapshot[] = [
     {
-      taken_on: '2026-08-15',
+      taken_on: '2026-08-10',
       tracked_packages: 1000,
       provenant_packages: 96,
       tracked_versions: 10_000,
       provenant_versions: 666,
     },
     {
-      taken_on: '2026-08-20',
+      taken_on: '2026-08-17',
       tracked_packages: 1000,
       provenant_packages: 97,
       tracked_versions: 10_000,
@@ -51,6 +51,6 @@ test('snapshotSeries returns the newest observation first', async () => {
   assert.deepEqual(bindings, [7]);
   assert.deepEqual(
     snapshots.map((snapshot) => snapshot.taken_on),
-    ['2026-08-20', '2026-08-15'],
+    ['2026-08-17', '2026-08-10'],
   );
 });

@@ -38,6 +38,24 @@ RSpec.describe "ingestion rake tasks" do
     expect { invoke_task("ingest:discover") }.to output(":discovered\n").to_stdout
   end
 
+  it "fails discovery when the page budget is exhausted" do
+    operation = instance_double(Ingestion::Operations::DiscoverNewVersions)
+    result = Dry::Monads::Result::Success.new(
+      drained: false, synced_through: Time.utc(2026, 8, 17)
+    )
+    allow(Ingestion::Slice).to receive(:[]).with("operations.discover_new_versions").and_return(operation)
+    expect(operation).to receive(:call)
+      .with(adapter: an_instance_of(Ingestion::Adapters::Rubygems))
+      .and_return(result)
+
+    expect { invoke_task("ingest:discover") }
+      .to raise_error(
+        IngestionTaskSupport::IncompleteDiscovery,
+        "ingest:discover exhausted its page budget at 2026-08-17 00:00:00 UTC; " \
+        "rerun to resume from the persisted cursor"
+      )
+  end
+
   it "keeps the refresh limit first and defaults its registry to RubyGems" do
     operation = instance_double(Ingestion::Operations::RefreshProvenance)
     allow(Ingestion::Slice).to receive(:[]).with("operations.refresh_provenance").and_return(operation)
