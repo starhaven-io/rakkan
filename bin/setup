@@ -33,6 +33,7 @@ node scripts/check-npm-install-policy.mjs site
 (cd site && npm ci --strict-allow-scripts)
 
 announce "Exporting to the site's local D1..."
+bash scripts/normalize-rubygems-weekly-snapshots.sh db/rakkan.sqlite
 bundle exec rake export:d1
 (cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql)
 

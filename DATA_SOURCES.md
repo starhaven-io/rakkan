@@ -22,10 +22,12 @@ for any part of the pipeline. The recommended ingestion path is:
    11,920 distinct attested versions registry-wide as of 2026-08-10). COPY
    blocks are plain TSV, so a streaming parser suffices; no Postgres server
    required.
-2. **Freshness (daily):** `GET /api/v1/timeframe_versions.json` (7-day
-   window, paginated) to discover new versions of tracked gems, then
-   `GET /api/v1/attestations/<name>-<version>.json` per new version. Well
-   within documented rate limits for a top-1000 tracked set.
+2. **Freshness (weekly post-dump):**
+   `GET /api/v1/timeframe_versions.json` (7-day window, paginated) discovers
+   new versions of tracked gems, then
+   `GET /api/v1/attestations/<name>-<version>.json` checks each new version.
+   The API updates continuously, but rakkan polls it after each weekly dump so
+   observations share the dump cadence.
 3. **Identity enrichment:** parse the Fulcio X.509 certificate inside each
    sigstore bundle (stdlib OpenSSL; extension OIDs `1.3.6.1.4.1.57264.1.*`)
    to get issuer, source repo, workflow, commit, and run URL.

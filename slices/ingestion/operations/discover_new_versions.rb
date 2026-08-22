@@ -21,9 +21,10 @@ module Ingestion
       # Re-cover the boundary so publishes racing the previous run are seen;
       # upserts make the overlap harmless.
       OVERLAP = 3600
-      # Politeness cap per run. If the feed has more, we stop with the
-      # cursor parked at the last processed instant and report drained: false.
-      MAX_PAGES_PER_RUN = 20
+      # Weekly production runs must drain a full seven-day window. At the
+      # API's 30 entries per page, this covers 15,000 releases with headroom
+      # above the 8,306 releases observed during 2026-08-10..17.
+      MAX_PAGES_PER_RUN = 500
 
       def call(from: nil, to: Time.now.utc, adapter: rubygems)
         registry = registry_repo.by_name(adapter.registry_slug)

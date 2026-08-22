@@ -60,7 +60,7 @@ local D1.
 ```sh
 bundle exec rake ingest:discover      # find versions published since the seed dump
 bundle exec rake "ingest:refresh[50]" # check provenance for up to N unchecked versions
-bundle exec rake snapshot:take        # record today's adoption stats
+bundle exec rake snapshot:take        # record the current adoption stats
 ```
 
 Both live tasks go through a polite client: identifying User-Agent, ~4
@@ -68,25 +68,30 @@ requests/second (rubygems.org documents 10 rps), exponential backoff
 honoring Retry-After, and an on-disk cache under `var/cache/`. Discovery
 reruns serve already-seen feed pages from that cache; provenance checks
 deliberately bypass the read side of the cache so they observe current
-registry state. Everything is idempotent; running twice converges.
+registry state. Everything is idempotent; running twice converges. If
+discovery exhausts its page budget, it fails after persisting its cursor so
+production cannot publish a partial observation. The workflow retries from
+that cursor up to three times in the same database before failing the run.
 
-The two data sources run on different cadences, deliberately:
+The inputs update at different cadences, but production observations align to
+RubyGems.org's weekly dump:
 
-- **Daily (live APIs):** discovery pulls newly published versions from the
-  registry's feed, refresh checks their attestations, and the snapshot
-  records that day's adoption. Day-over-day movement on the site comes
-  entirely from this path; the dump is not involved.
 - **Weekly (public dump):** RubyGems.org publishes its dump weekly, so the
   tracked set itself (the top-1,000 ranking and download counts) is
   re-derived on that cadence with the scripts under `research/`
   (`extract_dump.rb` → `top_gems.rb` → `filter_versions.rb` →
   `build_seed.rb`), and packages that fell out of the top 1,000 are
   untracked. Between dumps the denominator intentionally holds still.
+- **Post-dump (live APIs):** discovery pulls newly published versions from the
+  registry's feed and refresh checks their attestations once per week. The
+  resulting observation is dated to the Monday dump so the series has one
+  comparable point per dump rather than flat daily entries.
 
-The `Refresh Data` workflow runs the daily path against a fresh engine
-database restored from production D1, then replaces D1 only after ingestion,
-snapshotting, and export all succeed. Changes under `site/` deploy separately
-through the `Deploy Site` workflow; site deploys do not rewrite data.
+The `Refresh Data` workflow runs at 06:17 UTC each Tuesday, after the Monday
+dump, against a fresh engine database restored from production D1. It replaces
+D1 only after ingestion, snapshotting, weekly history normalization, and export
+all succeed. Changes under `site/` deploy separately through the `Deploy Site`
+workflow; site deploys do not rewrite data.
 
 ## Tests
 
