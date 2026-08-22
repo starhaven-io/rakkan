@@ -108,6 +108,8 @@ responses (see `research/`).
   the ingest/snapshot operations
 - `seed/rubygems/`: compact tracked-set data derived from the 2026-08-10
   weekly dump (see `manifest.json`)
+- `seed/cratesio/`: compact tracked-set data derived from the 2026-08-21
+  daily dump; its versions remain unchecked until the provenance backfill
 - `research/`: the dump-processing scripts and recorded registry samples
 
 <!-- fleet:block license-section -->

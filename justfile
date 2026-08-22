@@ -15,21 +15,21 @@ db-prepare:
 
 # Data
 
-# Load the tracked set from committed seed data (no network; idempotent)
-seed:
-    bundle exec rake ingest:seed
+# Load a registry's tracked set from committed seed data (no network; idempotent)
+seed registry="rubygems":
+    bundle exec rake "ingest:seed[{{ registry }}]"
 
-# Discover versions published since the seed dump (live API)
-discover:
-    bundle exec rake ingest:discover
+# Discover versions published since a registry's seed dump (live API)
+discover registry="rubygems":
+    bundle exec rake "ingest:discover[{{ registry }}]"
 
-# Check provenance for up to N unchecked versions (live API)
-refresh n="50":
-    bundle exec rake "ingest:refresh[{{ n }}]"
+# Check provenance for up to N unchecked versions in a registry (live API)
+refresh n="50" registry="rubygems":
+    bundle exec rake "ingest:refresh[{{ n }},{{ registry }}]"
 
-# Record today's adoption snapshot
-snapshot:
-    bundle exec rake snapshot:take
+# Record today's adoption snapshot for a registry
+snapshot registry="rubygems":
+    bundle exec rake "snapshot:take[{{ registry }}]"
 
 # Export the database for the Workers site's D1 (db/d1_export.sql)
 export-d1:

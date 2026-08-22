@@ -5,10 +5,10 @@ registries: which packages publish with verifiable provenance, adoption share
 among the most-downloaded packages, and trends over time. RubyGems.org is the
 first production registry; the schema and ingestion pipeline are
 registry-agnostic. crates.io has its tracked set committed in
-`seed/cratesio/` and reads provenance from the API; what it still needs is
-the provenance backfill run and a registry argument on the ingestion tasks.
-PyPI is still provenance-only and needs both a tracked set and a durable
-discovery cursor.
+`seed/cratesio/`, reads provenance from the API, and can be selected by the
+ingestion tasks; what it still needs is the provenance backfill run. PyPI is
+still provenance-only and needs both a tracked set and a durable discovery
+cursor.
 Prefer reading the Hanami v3.0 guides (hanakai.org) or installed gem source
 over assuming framework APIs.
 
@@ -26,11 +26,11 @@ over assuming framework APIs.
   sigstore attestation parsing, operations);
   engine entry points are rake tasks (`lib/tasks/`). The web tier is
   `site/src/` (pages, D1 query layer, middleware).
-- **Data:** `seed/rubygems/` holds compact tracked-set data derived from the
-  weekly rubygems.org PostgreSQL dump (`manifest.json` records which one).
-  `research/` holds the dump-processing scripts and recorded registry
-  samples. DATA_SOURCES.md is the evidence base for where the provenance
-  signal lives.
+- **Data:** `seed/rubygems/` and `seed/cratesio/` hold compact tracked-set
+  data derived from their registries' weekly and daily public dumps;
+  `manifest.json` records the exact source for each. `research/` holds the
+  dump-processing scripts and recorded registry samples. DATA_SOURCES.md is
+  the evidence base for where the provenance signal lives.
 
 ## Commands
 
@@ -40,7 +40,8 @@ over assuming framework APIs.
   data (engine deps, databases, seed, site deps, local D1; no network
   beyond package installs). Piecemeal equivalents live in the justfile
   (`seed`, `snapshot`, `export-d1`, `site-db`).
-- Live-API tasks (`just discover`, `just refresh N`) hit rubygems.org.
+- Live-API tasks default to rubygems.org; their registry argument selects
+  another adapter where that operation is supported (`just refresh 50 cratesio`).
 
 ## Safety constraints
 
