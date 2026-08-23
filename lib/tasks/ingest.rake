@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "json"
+
 # Ingestion entry points. Each task boots the app and calls one operation in
 # the ingestion slice; see slices/ingestion/operations/.
 
@@ -99,7 +101,7 @@ namespace :ingest do
     result = IngestionTaskSupport.call(
       "ingest:refresh", "operations.refresh_provenance", adapter:, limit:
     )
-    puts result.inspect
+    puts JSON.generate(result.value!)
   end
 end
 

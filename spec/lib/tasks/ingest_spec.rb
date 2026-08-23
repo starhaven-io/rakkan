@@ -58,12 +58,14 @@ RSpec.describe "ingestion rake tasks" do
 
   it "keeps the refresh limit first and defaults its registry to RubyGems" do
     operation = instance_double(Ingestion::Operations::RefreshProvenance)
+    payload = { checked: 3, provenant: 1, settled: 0, remaining: 4 }
+    result = Dry::Monads::Result::Success.new(payload)
     allow(Ingestion::Slice).to receive(:[]).with("operations.refresh_provenance").and_return(operation)
     expect(operation).to receive(:call)
       .with(limit: 73, adapter: an_instance_of(Ingestion::Adapters::Rubygems))
-      .and_return(:refreshed)
+      .and_return(result)
 
-    expect { invoke_task("ingest:refresh", "73") }.to output(":refreshed\n").to_stdout
+    expect { invoke_task("ingest:refresh", "73") }.to output("#{JSON.generate(payload)}\n").to_stdout
   end
 
   it "defaults snapshots to RubyGems" do
@@ -86,12 +88,14 @@ RSpec.describe "ingestion rake tasks" do
 
   it "passes an explicit registry after the refresh limit" do
     operation = instance_double(Ingestion::Operations::RefreshProvenance)
+    payload = { checked: 12, provenant: 2, settled: 30, remaining: 9 }
+    result = Dry::Monads::Result::Success.new(payload)
     allow(Ingestion::Slice).to receive(:[]).with("operations.refresh_provenance").and_return(operation)
     expect(operation).to receive(:call)
       .with(limit: 12, adapter: an_instance_of(Ingestion::Adapters::Cratesio))
-      .and_return(:refreshed)
+      .and_return(result)
 
-    expect { invoke_task("ingest:refresh", "12", "cratesio") }.to output(":refreshed\n").to_stdout
+    expect { invoke_task("ingest:refresh", "12", "cratesio") }.to output("#{JSON.generate(payload)}\n").to_stdout
   end
 
   it "resolves an explicit snapshot registry through its adapter" do

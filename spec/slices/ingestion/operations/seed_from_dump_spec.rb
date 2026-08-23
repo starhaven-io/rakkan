@@ -139,6 +139,27 @@ RSpec.describe Ingestion::Operations::SeedFromDump, :db do
     expect(registry[:feed_synced_at].to_time).to eq(cratesio.seed_as_of.floor(6))
   end
 
+  it "preserves crates.io backfill progress when the dump seed is reapplied" do
+    cratesio = Ingestion::Adapters::Cratesio.new(
+      seed_dir: fixture_path("seed", "cratesio"),
+      http_client: FixtureHelpers::FakeHTTPClient.new
+    )
+    operation.call(adapter: cratesio)
+    checked = versions.order(:published_at).last
+    observed_at = cratesio.seed_as_of + 3600
+    versions.by_pk(checked[:id]).command(:update).call(
+      provenance_kind: "trustpub_metadata",
+      provenance_provider: "github",
+      provenance_checked_at: observed_at
+    )
+
+    operation.call(adapter: cratesio)
+
+    row = versions.by_pk(checked[:id]).one
+    expect(row).to include(provenance_kind: "trustpub_metadata", provenance_provider: "github")
+    expect(row[:provenance_checked_at].to_time).to eq(observed_at.floor(6))
+  end
+
   it "rejects a provenance-only adapter before creating its registry" do
     provenance_only = Ingestion::Adapters::Pypi.new(
       http_client: FixtureHelpers::FakeHTTPClient.new

@@ -34,7 +34,7 @@ module Ingestion
         checked = 0
         found = 0
 
-        candidates(registry.id, stale_after, limit, available_since).each do |row|
+        candidates(registry.id, stale_after, limit, available_since, now).each do |row|
           provenance = adapter.fetch_provenance(
             name: row[:name], number: row[:number], platform: row[:platform]
           )
@@ -46,7 +46,8 @@ module Ingestion
         end
 
         recompute_first_provenant_at(registry.id)
-        { checked:, provenant: found, settled: }
+        remaining = candidate_scope(registry.id, stale_after, available_since, now).count
+        { checked:, provenant: found, settled:, remaining: }
       end
 
       private
@@ -69,19 +70,25 @@ module Ingestion
       # Unchecked (or stale) versions of this registry's tracked packages,
       # newest first so fresh releases get provenance quickly. Sequel join
       # because the package name lives on packages.
-      def candidates(registry_id, stale_after, limit, available_since = nil)
+      def candidates(registry_id, stale_after, limit, available_since, now)
+        candidate_scope(registry_id, stale_after, available_since, now)
+          .select(
+            Sequel[:package_versions][:id],
+            Sequel[:packages][:name],
+            Sequel[:package_versions][:number],
+            Sequel[:package_versions][:platform]
+          )
+          .order(Sequel.desc(Sequel[:package_versions][:published_at]))
+          .limit(limit)
+      end
+
+      # The workflow consumes this count from the operation result instead of
+      # maintaining a second copy of the eligibility rules in shell SQL.
+      def candidate_scope(registry_id, stale_after, available_since, now)
         ds = package_versions.dataset
                              .join(:packages, id: :package_id)
                              .where(Sequel[:packages][:registry_id] => registry_id)
                              .where(Sequel[:packages][:tracked] => true)
-                             .select(
-                               Sequel[:package_versions][:id],
-                               Sequel[:packages][:name],
-                               Sequel[:package_versions][:number],
-                               Sequel[:package_versions][:platform]
-                             )
-                             .order(Sequel.desc(Sequel[:package_versions][:published_at]))
-                             .limit(limit)
         if available_since
           ds = ds.where(
             Sequel.|(
@@ -93,7 +100,7 @@ module Ingestion
         if stale_after
           ds.where do
             (Sequel[:package_versions][:provenance_checked_at] =~ nil) |
-              (Sequel[:package_versions][:provenance_checked_at] < Time.now.utc - stale_after)
+              (Sequel[:package_versions][:provenance_checked_at] < now - stale_after)
           end
         else
           ds.where(Sequel[:package_versions][:provenance_checked_at] => nil)

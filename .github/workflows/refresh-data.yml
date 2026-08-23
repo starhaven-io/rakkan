@@ -3,8 +3,16 @@ name: Refresh Data
 on:
   workflow_dispatch:
     inputs:
+      registry:
+        description: Registry to refresh
+        required: true
+        default: rubygems
+        type: choice
+        options:
+          - rubygems
+          - cratesio
       refresh_limit:
-        description: Maximum provenance lookups for this run
+        description: Maximum provenance lookups per attempt
         required: true
         default: "250"
         type: string
@@ -20,7 +28,7 @@ on:
       - "config/db/structure.sql"
       - "db/normalize_rubygems_weekly_snapshots.sql"
       - "scripts/normalize-rubygems-weekly-snapshots.sh"
-      - "seed/**"
+      - "seed/rubygems/**"
 
 permissions: {}
 
@@ -44,14 +52,19 @@ jobs:
     env:
       DATABASE_URL: sqlite://db/rakkan.sqlite
       HANAMI_ENV: production
+      REGISTRY: ${{ inputs.registry || 'rubygems' }}
       REFRESH_LIMIT: ${{ inputs.refresh_limit || '250' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Validate refresh limit
+      - name: Validate refresh inputs
         run: |
+          if ! [[ "${REGISTRY}" =~ ^(rubygems|cratesio)$ ]]; then
+            echo "::error::registry must be rubygems or cratesio"
+            exit 1
+          fi
           if ! [[ "${REFRESH_LIMIT}" =~ ^[1-9][0-9]{0,3}$ ]] || (( REFRESH_LIMIT > 1000 )); then
             echo "::error::refresh_limit must be an integer from 1 to 1000"
             exit 1
@@ -121,21 +134,47 @@ jobs:
 
       - name: Ingest registry changes
         run: |
-          bundle exec rake ingest:seed
-          # A capped attempt persists its cursor in this job's database; retry
-          # here so a backlog can converge before any snapshot is published.
+          bundle exec rake "ingest:seed[${REGISTRY}]"
+          if [[ "${REGISTRY}" == "rubygems" ]]; then
+            # A capped attempt persists its cursor in this job's database; retry
+            # here so a backlog can converge before any snapshot is published.
+            for attempt in 1 2 3; do
+              if bundle exec rake "ingest:discover[${REGISTRY}]"; then
+                break
+              fi
+              if (( attempt == 3 )); then
+                echo "::error::ingest:discover did not drain after ${attempt} attempts"
+                exit 1
+              fi
+              echo "::warning::ingest:discover reached its page budget; retrying from its cursor"
+            done
+          fi
+          refresh_deadline=$(( SECONDS + 1800 - REFRESH_LIMIT ))
+          refresh_result=""
           for attempt in 1 2 3; do
-            if bundle exec rake ingest:discover; then
+            if refresh_result="$(bundle exec rake "ingest:refresh[${REFRESH_LIMIT},${REGISTRY}]")"; then
+              printf '%s\n' "${refresh_result}"
               break
             fi
-            if (( attempt == 3 )); then
-              echo "::error::ingest:discover did not drain after ${attempt} attempts"
+            if (( attempt == 3 || SECONDS >= refresh_deadline )); then
+              echo "::error::ingest:refresh did not complete within its retry budget"
               exit 1
             fi
-            echo "::warning::ingest:discover reached its page budget; retrying from its cursor"
+            echo "::warning::ingest:refresh failed; retrying from its persisted checks"
           done
-          bundle exec rake "ingest:refresh[${REFRESH_LIMIT}]"
-          bundle exec rake snapshot:take
+
+          refresh_payload="${refresh_result##*$'\n'}"
+          if ! remaining="$(jq -er '.remaining | select(type == "number" and . >= 0)' <<< "${refresh_payload}")"; then
+            echo "::error::ingest:refresh did not report a valid remaining count"
+            exit 1
+          fi
+          echo "${REGISTRY}: ${remaining} tracked versions remain unchecked" >> "${GITHUB_STEP_SUMMARY}"
+          if [[ "${REGISTRY}" == "cratesio" && "${remaining}" -gt 0 ]]; then
+            echo "crates.io backfill remains in progress; publishing the durable cursor without a snapshot" \
+              >> "${GITHUB_STEP_SUMMARY}"
+          else
+            bundle exec rake "snapshot:take[${REGISTRY}]"
+          fi
 
       - name: Align RubyGems history to weekly dumps
         run: bash scripts/normalize-rubygems-weekly-snapshots.sh db/rakkan.sqlite
@@ -144,6 +183,7 @@ jobs:
         run: bundle exec rake export:d1
 
       - name: Replace production data
+        if: github.event_name != 'push'
         working-directory: site
         run: ./node_modules/.bin/wrangler d1 execute rakkan --remote --file=../db/d1_export.sql --yes
         env:
@@ -151,10 +191,14 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
 
+      - name: Report dry run
+        if: github.event_name == 'push'
+        run: echo "Ingestion and export completed as a dry run; production D1 was not replaced." >> "${GITHUB_STEP_SUMMARY}"
+
   refresh-issue:
     name: Open/close refresh issue
     needs: refresh
-    if: ${{ always() && (needs.refresh.result == 'success' || needs.refresh.result == 'failure') }}
+    if: ${{ always() && github.event_name != 'push' && (needs.refresh.result == 'success' || needs.refresh.result == 'failure') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     continue-on-error: true # issue bookkeeping must not override the refresh result
@@ -165,7 +209,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          ISSUE_TITLE: Refresh data workflow failing
+          ISSUE_TITLE: Refresh data workflow failing (${{ inputs.registry || 'rubygems' }})
           REFRESH_RESULT: ${{ needs.refresh.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

@@ -12,16 +12,17 @@ interface Props {
 
 const { title = 'rakkan · trusted publishing adoption', query = '', freshness = true } = Astro.props;
 
-// Freshness note in the header: when this dataset was built (the export
-// runs only after ingest succeeds, so this never overstates). Best-effort:
-// on an unloaded local D1 it simply renders nothing. Pages that should not
-// pay a D1 read for it (the 404 page) opt out via the freshness prop.
-let updatedAt: string | null = null;
+// Export-generation note in the header. It intentionally describes the whole
+// D1 artifact rather than claiming that the registry displayed on a page was
+// refreshed by the latest multi-registry pipeline run. Best-effort: on an
+// unloaded local D1 it simply renders nothing. Pages that should not pay a D1
+// read for it (the 404 page) opt out via the freshness prop.
+let exportedAt: string | null = null;
 if (freshness) {
   try {
-    updatedAt = utcStamp(await exportGeneratedAt(getDb()));
+    exportedAt = utcStamp(await exportGeneratedAt(getDb()));
   } catch {
-    updatedAt = null;
+    exportedAt = null;
   }
 }
 
@@ -45,7 +46,7 @@ const favicon =
           <span class="brand-mark" aria-hidden="true">落</span>
           <span class="brand-copy">
             <span class="brand-name">rakkan</span>
-            {updatedAt && <span class="header-note">updated {updatedAt}</span>}
+            {exportedAt && <span class="header-note">exported {exportedAt}</span>}
           </span>
         </a>
         <nav class="registry-nav" aria-label="Package registries">

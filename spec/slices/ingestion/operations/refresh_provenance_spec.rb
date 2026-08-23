@@ -38,7 +38,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
     result = operation.call(adapter:)
 
     expect(result).to be_success
-    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0)
+    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0, remaining: 0)
     expect(versions.by_pk(attested).one[:provenance_kind]).to eq("sigstore_attestation")
     expect(versions.by_pk(plain).one).to include(provenance_kind: nil)
     expect(versions.by_pk(plain).one[:provenance_checked_at]).not_to be_nil
@@ -70,7 +70,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(adapter:)
 
-    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0)
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, remaining: 0)
     expect(versions.by_pk(other_version).one[:provenance_checked_at]).to be_nil
   end
 
@@ -84,13 +84,58 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(adapter:)
 
-    expect(result.value!).to eq(checked: 2, provenant: 0, settled: 1)
+    expect(result.value!).to eq(checked: 2, provenant: 0, settled: 1, remaining: 0)
     # The old version is recorded as observed, not left unchecked, but no
     # request was spent on it. An unknown publish time still gets asked.
     expect(versions.by_pk(old).one[:provenance_checked_at]).not_to be_nil
     expect(adapter.requested).to contain_exactly("serde-1.0.228-ruby", "serde-0.0.1-ruby")
     expect(versions.by_pk(recent).one[:provenance_checked_at]).not_to be_nil
     expect(versions.by_pk(unknown).one[:provenance_checked_at]).not_to be_nil
+  end
+
+  it "checks a newest-first bounded batch and resumes with the next version" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "serde")
+    oldest = create_version!(pkg, number: "1.0.0", published_at: Time.utc(2025, 7, 5))
+    create_version!(pkg, number: "2.0.0", published_at: Time.utc(2025, 8, 5))
+    create_version!(pkg, number: "3.0.0", published_at: Time.utc(2025, 9, 5))
+    adapter = FakeProvenanceAdapter.new(provenance_available_since: Time.utc(2025, 7, 4))
+
+    first = operation.call(limit: 2, adapter:)
+
+    expect(first.value!).to eq(checked: 2, provenant: 0, settled: 0, remaining: 1)
+    expect(adapter.requested).to eq(%w[serde-3.0.0-ruby serde-2.0.0-ruby])
+    expect(versions.by_pk(oldest).one[:provenance_checked_at]).to be_nil
+
+    second = operation.call(limit: 2, adapter:)
+
+    expect(second.value!).to eq(checked: 1, provenant: 0, settled: 0, remaining: 0)
+    expect(adapter.requested).to eq(%w[serde-3.0.0-ruby serde-2.0.0-ruby serde-1.0.0-ruby])
+    expect(versions.by_pk(oldest).one[:provenance_checked_at]).not_to be_nil
+  end
+
+  it "keeps completed checks when a later request interrupts the batch" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "serde")
+    interrupted = create_version!(pkg, number: "2.0.0", published_at: Time.utc(2025, 8, 5))
+    completed = create_version!(pkg, number: "3.0.0", published_at: Time.utc(2025, 9, 5))
+    adapter = FakeProvenanceAdapter.new(provenance_available_since: Time.utc(2025, 7, 4))
+    allow(adapter).to receive(:fetch_provenance).and_wrap_original do |method, **args|
+      raise Net::ReadTimeout, "timed out" if args[:number] == "2.0.0"
+
+      method.call(**args)
+    end
+
+    expect { operation.call(limit: 2, adapter:) }.to raise_error(Net::ReadTimeout)
+
+    expect(versions.by_pk(completed).one[:provenance_checked_at]).not_to be_nil
+    expect(versions.by_pk(interrupted).one[:provenance_checked_at]).to be_nil
+
+    allow(adapter).to receive(:fetch_provenance).and_call_original
+    result = operation.call(limit: 2, adapter:)
+
+    expect(result.value!).to eq(checked: 1, provenant: 0, settled: 0, remaining: 0)
+    expect(versions.by_pk(interrupted).one[:provenance_checked_at]).not_to be_nil
   end
 
   it "fails cleanly for an unknown registry" do
