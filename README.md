@@ -93,6 +93,26 @@ D1 only after ingestion, snapshotting, weekly history normalization, and export
 all succeed. Changes under `site/` deploy separately through the `Deploy Site`
 workflow; site deploys do not rewrite data.
 
+Pushes that change the refresh workflow, database schema, normalization, or the
+RubyGems seed run the same ingestion and export path as a dry run. They never
+replace production D1 or change production refresh-issue state; publication is
+limited to scheduled and explicitly dispatched runs.
+
+The same workflow is the crates.io provenance-backfill entry point. Dispatch it
+with `registry=cratesio` and `refresh_limit=1000`, then repeat until the job
+summary reports zero tracked versions unchecked. Each run restores the prior D1
+state, re-seeds idempotently from the committed crates.io dump, settles releases
+from before trusted publishing existed without API calls, and persists the next
+bounded batch. It records the first crates.io snapshot only after the backfill
+is complete, so a partial observation is not presented as an adoption point.
+Refresh retries share a 30-minute wall-clock budget, and the engine reports the
+authoritative remaining backlog from the same scope it uses to select work.
+
+Schema changes that site queries depend on must land before the corresponding
+site change: merge the schema, dispatch `Refresh Data`, then merge the site
+query. Push runs are deliberately dry runs and cannot order those production
+deployments automatically.
+
 ## Tests
 
 ```sh
