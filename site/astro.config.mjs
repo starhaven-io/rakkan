@@ -14,7 +14,5 @@ export default defineConfig({
   vite: { build: { assetsInlineLimit: 0 } },
   adapter: cloudflare({
     imageService: 'passthrough',
-    // Expose the D1 binding to `astro dev` (and SSR) so on-demand pages can query it.
-    platformProxy: { enabled: true },
   }),
 });

@@ -45,9 +45,7 @@ test('a new data generation bypasses the prior rendered page', async () => {
   assert.equal(refreshed.headers.get('cache-control'), BROWSER_CACHE_CONTROL);
   assert.equal(cache.entries.size, 2);
   assert.equal(
-    cache.entries
-      .get(versionedCacheKey(url, '2026-08-22 17:28:00'))
-      ?.headers.get('cache-control'),
+    cache.entries.get(versionedCacheKey(url, '2026-08-22 17:28:00'))?.headers.get('cache-control'),
     EDGE_CACHE_CONTROL,
   );
 });
@@ -81,12 +79,7 @@ test('non-successful responses are not cached or rewritten', async () => {
 
 test('a missing generation renders without consulting the shared cache', async () => {
   const cache = new MemoryCache();
-  const response = await serveVersionedPage(
-    cache,
-    'https://rakkan.dev/',
-    null,
-    async () => new Response('fresh'),
-  );
+  const response = await serveVersionedPage(cache, 'https://rakkan.dev/', null, async () => new Response('fresh'));
 
   assert.equal(await response.text(), 'fresh');
   assert.equal(response.headers.get('cache-control'), null);

@@ -10,11 +10,7 @@ interface Props {
   freshness?: boolean;
 }
 
-const {
-  title = 'rakkan · trusted publishing adoption',
-  query = '',
-  freshness = true,
-} = Astro.props;
+const { title = 'rakkan · trusted publishing adoption', query = '', freshness = true } = Astro.props;
 
 // Freshness note in the header: when this dataset was built (the export
 // runs only after ingest succeeds, so this never overstates). Best-effort:
@@ -81,9 +77,8 @@ const favicon =
       <slot />
     </main>
     <footer class="site-footer">
-      rakkan (落款): the seal an artist stamps on a work to certify it. This site tracks verifiable
-      publishing provenance across package registries, from public APIs and data dumps only; no
-      registry HTML is scraped.
+      rakkan (落款): the seal an artist stamps on a work to certify it. This site tracks verifiable publishing
+      provenance across package registries, from public APIs and data dumps only; no registry HTML is scraped.
     </footer>
   </body>
 </html>

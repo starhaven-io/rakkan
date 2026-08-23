@@ -4,14 +4,7 @@ export const prerender = false;
 import Base from '../../layouts/Base.astro';
 import { getDb } from '../../lib/db.ts';
 import { packageByName, registryByName, versionsOf } from '../../lib/d1.ts';
-import {
-  formatCount,
-  packageNoun,
-  provenanceLabel,
-  repositoryLabel,
-  safeHttpsUrl,
-  shortDate,
-} from '../../lib/format.ts';
+import { formatCount, provenanceLabel, repositoryLabel, safeHttpsUrl, shortDate } from '../../lib/format.ts';
 
 const db = getDb();
 const name = Astro.params.name ?? '';
@@ -23,8 +16,7 @@ if (!registry || !pkg) {
 }
 
 const versions = await versionsOf(db, registry.id, pkg.name);
-const registryPackageUrl =
-  registry.name === 'rubygems' ? `https://rubygems.org/gems/${pkg.name}` : null;
+const registryPackageUrl = registry.name === 'rubygems' ? `https://rubygems.org/gems/${pkg.name}` : null;
 ---
 
 <Base title={`${pkg.name} · rakkan`}>
@@ -42,11 +34,13 @@ const registryPackageUrl =
       }
       {pkg.tracked !== 1 && <span class="badge neutral">No longer in the tracked set</span>}
       <div class="package-meta">
-        {pkg.rank != null && (
-          <span>
-            Rank <strong>#{formatCount(pkg.rank)}</strong>
-          </span>
-        )}
+        {
+          pkg.rank != null && (
+            <span>
+              Rank <strong>#{formatCount(pkg.rank)}</strong>
+            </span>
+          )
+        }
         <span><strong>{formatCount(pkg.downloads_total ?? 0)}</strong> downloads</span>
         <span><strong>{formatCount(versions.length)}</strong> recorded versions</span>
       </div>
