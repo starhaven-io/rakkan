@@ -27,4 +27,6 @@ end
 group :test do
   # Database
   gem "database_cleaner-sequel"
+  gem "simplecov", "~> 1.1", require: false
+  gem "simplecov-cobertura", "~> 4.0", require: false
 end

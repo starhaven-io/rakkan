@@ -8,6 +8,7 @@ db/*.sqlite-journal
 db/d1_export.sql
 site/node_modules/
 site/dist/
+coverage/
 site/.wrangler/
 .wrangler/
 site/.astro/
