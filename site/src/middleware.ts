@@ -30,7 +30,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 // absent in plain node contexts, so those contexts degrade to pass-through.
 
 function edgeCache(): Cache | undefined {
-  // Dev serves fresh renders (the platform proxy has a working Cache API,
+  // Dev serves fresh renders (the Cloudflare Vite plugin has a working Cache API,
   // which would otherwise pin stale pages across edits).
   if (!import.meta.env.PROD) return undefined;
   return (globalThis as { caches?: { default?: Cache } }).caches?.default;

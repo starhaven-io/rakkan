@@ -70,11 +70,12 @@ over assuming framework APIs.
 - Bulk writes intentionally drop to documented Sequel
   (`insert_conflict` + `multi_insert`); `Relation#dataset` is public ROM
   API, so leave these rather than reworking them into ROM DSL.
-- A long-lived process (console, astro dev via the platform proxy) holds
+- A long-lived process (console, Astro dev through the Cloudflare Vite plugin) holds
   SQLite's old inode across `rm`; restart after rebuilding databases.
 - Astro routes must set `export const prerender = false` or dynamic routes
-  demand `getStaticPaths`; JSX collapses whitespace at expression
-  boundaries, so spaces between adjacent expressions need `{' '}`.
+  demand `getStaticPaths`. Astro preserves source whitespace around
+  expressions, and HTML collapses line breaks to spaces; keep punctuation in
+  the same expression or formatter string when it must remain attached.
 
 ## CI
 
