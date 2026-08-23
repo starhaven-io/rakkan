@@ -150,3 +150,75 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
+
+  refresh-issue:
+    name: Open/close refresh issue
+    needs: refresh
+    if: ${{ always() && (needs.refresh.result == 'success' || needs.refresh.result == 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true # issue bookkeeping must not override the refresh result
+    permissions:
+      issues: write # required to find, create, comment on, and close the failure issue
+    steps:
+      - name: Open, update, or close refresh issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_TITLE: Refresh data workflow failing
+          REFRESH_RESULT: ${{ needs.refresh.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          retry_gh() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(gh "$@")"; then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh $1 failed on attempt ${attempt}; retrying in 5 seconds" >&2
+                sleep 5
+              fi
+            done
+            return 1
+          }
+
+          if ! numbers="$(retry_gh api --paginate --method GET "repos/${GH_REPO}/issues" \
+              -f state=open \
+              -f 'creator=github-actions[bot]' \
+              -f per_page=100 \
+              --jq '.[] | select(.title == env.ISSUE_TITLE and (has("pull_request") | not)) | .number')"; then
+            echo "::warning::failed to list refresh failure issues"
+            exit 1
+          fi
+
+          bookkeeping_status=0
+
+          if [ "${REFRESH_RESULT}" = "success" ]; then
+            while IFS= read -r number; do
+              [ -n "${number}" ] || continue
+              if ! retry_gh issue close "${number}" --reason completed \
+                  --comment "Refresh run succeeded: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to close refresh issue #${number}"
+                bookkeeping_status=1
+              fi
+            done <<< "${numbers}"
+          elif [ "${REFRESH_RESULT}" = "failure" ]; then
+            number="${numbers%%$'\n'*}"
+            if [ -n "${number}" ]; then
+              if ! retry_gh issue comment "${number}" --body "Refresh run failed: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to comment on refresh issue #${number}"
+                bookkeeping_status=1
+              fi
+            else
+              issue_body="$(printf 'Refresh run failed: %s\n\nFiled automatically by refresh-data.yml; the next successful refresh closes this issue.\n' \
+                "${RUN_URL}")"
+              if ! retry_gh issue create --title "${ISSUE_TITLE}" --body "${issue_body}" </dev/null; then
+                echo "::warning::failed to create refresh failure issue"
+                bookkeeping_status=1
+              fi
+            fi
+          fi
+
+          exit "${bookkeeping_status}"

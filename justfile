@@ -70,6 +70,18 @@ test-cov:
 rubocop:
     bundle exec rubocop
 
+# Format site files with Prettier
+site-format:
+    cd site && npm run format
+
+# Check site formatting
+site-format-check:
+    cd site && npm run format:check
+
+# Type-check the Astro site
+site-check:
+    cd site && npm run check
+
 # Check
 
 # Run all checks
@@ -93,6 +105,8 @@ check:
     run rspec env COVERAGE=true bundle exec rspec
     run rubocop bundle exec rubocop
     if [ -d site/node_modules ]; then
+        run site-format bash -c 'cd site && npm run --silent format:check'
+        run site-check bash -c 'cd site && npm run --silent check'
         run site-tests bash -c 'cd site && npm run --silent test:coverage'
         run site-build bash -c 'cd site && ./node_modules/.bin/astro build --silent > /dev/null'
     else

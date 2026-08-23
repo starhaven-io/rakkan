@@ -9,6 +9,7 @@ import {
   provenanceLabel,
   repositoryLabel,
   safeHttpsUrl,
+  searchResultSummary,
   shortDate,
   utcStamp,
 } from '../src/lib/format.ts';
@@ -67,6 +68,10 @@ test('packageNoun follows the registry slug', () => {
   assert.equal(packageNoun('rubygems', 2), 'gems');
   assert.equal(packageNoun('cratesio', 1), 'crate');
   assert.equal(packageNoun(undefined, 2), 'packages');
+});
+
+test('searchResultSummary keeps the registry name and sentence punctuation together', () => {
+  assert.equal(searchResultSummary('rubygems', 'RubyGems.org', 12), '12 tracked gems matched in RubyGems.org.');
 });
 
 test('provenanceLabel names the signal per kind', () => {

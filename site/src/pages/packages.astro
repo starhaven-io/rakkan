@@ -17,7 +17,8 @@ const noun = packageNoun(registry?.name, 2);
   <header class="page-heading">
     <h1>All tracked {noun}</h1>
     <p>
-      The full tracked set: the top {formatCount(packages.length)} {noun} on{' '}
+      The full tracked set: the top {formatCount(packages.length)}
+      {noun} on{' '}
       {registry?.display_name ?? 'the registry'} by total downloads, in rank order.{' '}
       {formatCount(provenant)} carry provenance on at least one release.
     </p>

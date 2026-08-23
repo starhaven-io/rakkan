@@ -4,7 +4,7 @@ export const prerender = false;
 import Base from '../layouts/Base.astro';
 import { getDb } from '../lib/db.ts';
 import { registryByName, searchPackages } from '../lib/d1.ts';
-import { formatCount, packageNoun, shortDate } from '../lib/format.ts';
+import { formatCount, packageNoun, searchResultSummary, shortDate } from '../lib/format.ts';
 
 const db = getDb();
 const query = (Astro.url.searchParams.get('q') ?? '').trim();
@@ -41,10 +41,7 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
             <h3>
               Results for <code>{query}</code>
             </h3>
-            <p>
-              {results.length} tracked {packageNoun(registry?.name, results.length)} matched in{' '}
-              {registry?.display_name}.
-            </p>
+            <p>{searchResultSummary(registry?.name, registry?.display_name, results.length)}</p>
           </div>
         </header>
         <div class="table-wrap">

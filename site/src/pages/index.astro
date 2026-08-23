@@ -3,13 +3,7 @@ export const prerender = false;
 
 import Base from '../layouts/Base.astro';
 import { getDb } from '../lib/db.ts';
-import {
-  latestSnapshot,
-  recentConversions,
-  registryByName,
-  snapshotSeries,
-  topPackages,
-} from '../lib/d1.ts';
+import { latestSnapshot, recentConversions, registryByName, snapshotSeries, topPackages } from '../lib/d1.ts';
 import { formatCount, packageNoun, percentage, safeHttpsUrl, shortDate } from '../lib/format.ts';
 
 const db = getDb();
@@ -42,9 +36,9 @@ const registryUrl = safeHttpsUrl(registry?.url);
           <div class="hero-copy">
             <h1>{registry.display_name}</h1>
             <p>
-              Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)}{' '}
-              {packageWord} by total downloads. Attestation presence is a lower bound: a{' '}
-              {packageNoun(registry.name)} can be pushed by a trusted publisher without attestations.
+              Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)} {packageWord} by total
+              downloads. Attestation presence is a lower bound: a {packageNoun(registry.name)} can be pushed by a
+              trusted publisher without attestations.
             </p>
           </div>
           <div class="hero-actions">
@@ -64,16 +58,15 @@ const registryUrl = safeHttpsUrl(registry?.url);
               <div class="progress-fill" style={`width: ${adoptionRate}%`} />
             </div>
             <span class="stat-detail">
-              {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)}{' '}
-              tracked {packageWord}
+              {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)} tracked{' '}
+              {packageWord}
             </span>
           </article>
           <article class="stat-card">
             <span class="stat-label">Adopted packages</span>
             <strong class="stat-value">{formatCount(snapshot.provenant_packages)}</strong>
             <span class="stat-detail">
-              {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one
-              release carrying provenance
+              {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one release carrying provenance
             </span>
           </article>
           <article class="stat-card">

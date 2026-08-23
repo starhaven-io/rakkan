@@ -50,9 +50,7 @@ export interface VersionRow {
 }
 
 export async function exportGeneratedAt(db: D1): Promise<string | null> {
-  const row = await db
-    .prepare('SELECT generated_at FROM export_meta LIMIT 1')
-    .first<{ generated_at: string }>();
+  const row = await db.prepare('SELECT generated_at FROM export_meta LIMIT 1').first<{ generated_at: string }>();
   return row?.generated_at ?? null;
 }
 
@@ -125,11 +123,7 @@ export async function allTracked(db: D1, registryId: number): Promise<PackageRow
 
 // Deliberately does not filter on tracked: packages that leave the top
 // 1,000 keep working permalinks and render as no-longer-tracked.
-export async function packageByName(
-  db: D1,
-  registryId: number,
-  name: string,
-): Promise<PackageRow | null> {
+export async function packageByName(db: D1, registryId: number, name: string): Promise<PackageRow | null> {
   return db
     .prepare(
       `SELECT name, rank, downloads_total, first_provenant_at, tracked
@@ -154,12 +148,7 @@ export async function versionsOf(db: D1, registryId: number, name: string): Prom
   return results;
 }
 
-export async function searchPackages(
-  db: D1,
-  registryId: number,
-  query: string,
-  limit = 50,
-): Promise<PackageRow[]> {
+export async function searchPackages(db: D1, registryId: number, query: string, limit = 50): Promise<PackageRow[]> {
   const escaped = escapeLike(query);
   const { results } = await db
     .prepare(
