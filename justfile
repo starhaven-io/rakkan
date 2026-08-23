@@ -59,6 +59,11 @@ console:
 test:
     bundle exec rspec
 
+# Run all test suites and write the Codecov coverage reports
+test-cov:
+    COVERAGE=true bundle exec rspec
+    cd site && npm run test:coverage
+
 # Lint
 
 # Lint Ruby style
@@ -85,10 +90,10 @@ check:
         skipped+=("$2 (brew install $3)")
     }
     run npm-policy node scripts/check-npm-install-policy.mjs site
-    run rspec bundle exec rspec
+    run rspec env COVERAGE=true bundle exec rspec
     run rubocop bundle exec rubocop
     if [ -d site/node_modules ]; then
-        run site-tests bash -c 'cd site && npm run --silent test'
+        run site-tests bash -c 'cd site && npm run --silent test:coverage'
         run site-build bash -c 'cd site && ./node_modules/.bin/astro build --silent > /dev/null'
     else
         skip site-tests node_modules "just install-site"
