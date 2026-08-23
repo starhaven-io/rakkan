@@ -44,6 +44,11 @@ module Ingestion
       # considered checked only when this timestamp is present.
       def provenance_seed_as_of = nil
 
+      # Registries whose tracked set comes from a dated dump return that
+      # dump's day, so rerunning the same seed replaces one observation
+      # instead of adding one per dispatch.
+      def snapshot_taken_on = nil
+
       # Earliest publish time at which this registry could record provenance
       # (nil when it always could, or when the date is unknown). Versions
       # published earlier are settled without a live request: the mechanism

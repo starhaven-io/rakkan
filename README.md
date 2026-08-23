@@ -105,6 +105,9 @@ state, re-seeds idempotently from the committed crates.io dump, settles releases
 from before trusted publishing existed without API calls, and persists the next
 bounded batch. It records the first crates.io snapshot only after the backfill
 is complete, so a partial observation is not presented as an adoption point.
+The snapshot is dated to the committed dump rather than the dispatch, so
+rerunning an unchanged seed replaces that observation instead of adding a flat
+point on an arbitrary day.
 Refresh retries share a 30-minute wall-clock budget, and the engine reports the
 authoritative remaining backlog from the same scope it uses to select work.
 
