@@ -110,8 +110,11 @@ namespace :snapshot do
   task :take, [:registry] do |_task, args|
     require "hanami/boot"
     adapter = IngestionTaskSupport.adapter(args[:registry])
+    snapshot_args = { registry_name: adapter.registry_slug }
+    taken_on = adapter.snapshot_taken_on
+    snapshot_args[:taken_on] = taken_on if taken_on
     result = Ingestion::Slice["operations.take_snapshot"].call(
-      registry_name: adapter.registry_slug
+      **snapshot_args
     )
     puts result.inspect
   end

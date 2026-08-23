@@ -106,6 +106,22 @@ RSpec.describe "ingestion rake tasks" do
     expect { invoke_task("snapshot:take", "pypi") }.to output(":recorded\n").to_stdout
   end
 
+  it "dates a crates.io snapshot to its seed observation" do
+    adapter = instance_double(
+      Ingestion::Adapters::Cratesio,
+      registry_slug: "cratesio",
+      snapshot_taken_on: Date.new(2026, 8, 21)
+    )
+    operation = instance_double(Ingestion::Operations::TakeSnapshot)
+    allow(Ingestion::Slice).to receive(:[]).with("adapters.cratesio").and_return(adapter)
+    allow(Ingestion::Slice).to receive(:[]).with("operations.take_snapshot").and_return(operation)
+    expect(operation).to receive(:call)
+      .with(registry_name: "cratesio", taken_on: Date.new(2026, 8, 21))
+      .and_return(:recorded)
+
+    expect { invoke_task("snapshot:take", "cratesio") }.to output(":recorded\n").to_stdout
+  end
+
   {
     "ingest:seed" => ["krates"],
     "ingest:discover" => ["krates"],

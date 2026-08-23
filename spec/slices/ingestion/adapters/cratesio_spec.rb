@@ -67,6 +67,7 @@ RSpec.describe Ingestion::Adapters::Cratesio do
       # The dump stamps nanoseconds; parsing must not round them away.
       expect(adapter.seed_as_of).to eq(Time.utc(2026, 8, 20, 2, 0, 21, Rational(810_126_238, 1000)))
       expect(adapter.provenance_seed_as_of).to be_nil
+      expect(adapter.snapshot_taken_on).to eq(Date.new(2026, 8, 20))
     end
 
     it "floors provenance checks at the trustpub_data migration" do

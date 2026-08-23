@@ -59,6 +59,8 @@ module Ingestion
       # recorded as "no provenance found".
       def provenance_seed_as_of = nil
 
+      def snapshot_taken_on = seed_as_of&.utc&.to_date
+
       def provenance_available_since = PROVENANCE_AVAILABLE_SINCE
 
       def each_tracked_package
