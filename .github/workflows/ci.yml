@@ -62,11 +62,32 @@ jobs:
       - name: RuboCop
         run: bundle exec rubocop
 
+      - name: Restore typos cache
+        id: typos-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/typos
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-${{ runner.arch }}-typos-${{ hashFiles('.github/workflows/ci.yml') }}
+          restore-keys: ${{ runner.os }}-${{ runner.arch }}-typos-
+
       - name: Install typos-cli
         run: cargo install typos-cli --locked --version 1.49.0
 
       - name: Typos
         run: typos
+
+      - name: Save typos cache
+        if: github.event_name == 'push' && steps.typos-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/bin/typos
+            ~/.cargo/.crates.toml
+            ~/.cargo/.crates2.json
+          key: ${{ runner.os }}-${{ runner.arch }}-typos-${{ hashFiles('.github/workflows/ci.yml') }}
 
   site:
     name: Site
@@ -93,6 +114,14 @@ jobs:
         working-directory: site
         # Fail if an unreviewed dependency install script is introduced.
         run: npm ci --strict-allow-scripts
+
+      - name: Prettier
+        working-directory: site
+        run: npm run format:check
+
+      - name: Astro check
+        working-directory: site
+        run: npm run check
 
       - name: Test
         working-directory: site
