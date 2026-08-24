@@ -1,9 +1,10 @@
 # frozen_string_literal: true
 
-class FakeProvenanceAdapter
+class FakeProvenanceAdapter < Ingestion::Adapters::RegistryAdapter
   attr_reader :requested, :provenance_available_since
 
   def initialize(slug: "rubygems", responses: {}, provenance_available_since: nil)
+    super()
     @slug = slug
     @responses = responses
     @provenance_available_since = provenance_available_since
@@ -26,6 +27,103 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
   let(:provenance) do
     { provenance_kind: "sigstore_attestation", provenance_provider: "github",
       source_repository: "https://github.com/ruby/psych", attestation_count: 1 }
+  end
+
+  it "provides a per-version default for adapters that cannot batch" do
+    adapter = FakeProvenanceAdapter.new(responses: { "psych-5.1.0-ruby" => provenance })
+    versions = [{ number: "5.1.0", platform: "ruby" }]
+
+    results = adapter.each_provenance(name: "psych", versions:).to_a
+
+    expect(results).to eq([[versions.first, provenance]])
+    expect(adapter.requested).to eq(["psych-5.1.0-ruby"])
+  end
+
+  it "lets crates.io satisfy each package batch with one request" do
+    registry = create_registry!(name: "cratesio")
+    cargo = create_package!(registry, name: "cargo-semver-checks")
+    serde = create_package!(registry, name: "serde", rank: 2)
+    create_version!(cargo, number: "0.50.0", platform: "", published_at: Time.utc(2026, 8, 1))
+    create_version!(cargo, number: "0.43.0", platform: "", published_at: Time.utc(2026, 7, 1))
+    create_version!(serde, number: "1.0.228", platform: "", published_at: Time.utc(2026, 6, 1))
+    cargo_url = "https://crates.io/api/v1/crates/cargo-semver-checks/versions"
+    serde_url = "https://crates.io/api/v1/crates/serde/versions"
+    client = FixtureHelpers::FakeHTTPClient.new(
+      cargo_url => json_fixture("cratesio_versions.json"),
+      serde_url => { "versions" => [json_fixture("cratesio_version_token.json").fetch("version")] }
+    )
+    adapter = Ingestion::Adapters::Cratesio.new(
+      seed_dir: fixture_path("seed", "cratesio"), http_client: client
+    )
+
+    result = operation.call(limit: 3, adapter:)
+
+    expect(result.value!).to eq(checked: 3, provenant: 1, settled: 0, remaining: 0)
+    expect(client.requests).to eq([cargo_url, serde_url])
+  end
+
+  it "falls back for an omitted version and continues with the next crate" do
+    registry = create_registry!(name: "cratesio")
+    cargo = create_package!(registry, name: "cargo-semver-checks")
+    serde = create_package!(registry, name: "serde", rank: 2)
+    cargo_trusted = create_version!(
+      cargo, number: "0.50.0", platform: "", published_at: Time.utc(2026, 8, 3)
+    )
+    cargo_omitted = create_version!(
+      cargo, number: "0.43.0", platform: "", published_at: Time.utc(2026, 8, 2)
+    )
+    serde_plain = create_version!(
+      serde, number: "1.0.228", platform: "", published_at: Time.utc(2026, 8, 1)
+    )
+    cargo_url = "https://crates.io/api/v1/crates/cargo-semver-checks/versions"
+    omitted_url = "https://crates.io/api/v1/crates/cargo-semver-checks/0.43.0"
+    serde_url = "https://crates.io/api/v1/crates/serde/versions"
+    cargo_response = json_fixture("cratesio_versions.json")
+    cargo_response["versions"] = cargo_response.fetch("versions").first(1)
+    client = FixtureHelpers::FakeHTTPClient.new(
+      cargo_url => cargo_response,
+      omitted_url => nil,
+      serde_url => { "versions" => [json_fixture("cratesio_version_token.json").fetch("version")] }
+    )
+    adapter = Ingestion::Adapters::Cratesio.new(
+      seed_dir: fixture_path("seed", "cratesio"), http_client: client
+    )
+
+    result = operation.call(limit: 3, adapter:)
+
+    expect(result.value!).to eq(checked: 3, provenant: 1, settled: 0, remaining: 0)
+    expect(client.requests).to eq([cargo_url, omitted_url, serde_url])
+    expect([cargo_trusted, cargo_omitted, serde_plain]).to all(
+      satisfy { |id| versions.by_pk(id).one[:provenance_checked_at] }
+    )
+  end
+
+  it "keeps a completed crate batch when a later crate request is interrupted" do
+    registry = create_registry!(name: "cratesio")
+    cargo = create_package!(registry, name: "cargo-semver-checks")
+    serde = create_package!(registry, name: "serde", rank: 2)
+    completed = create_version!(
+      cargo, number: "0.50.0", platform: "", published_at: Time.utc(2026, 8, 2)
+    )
+    interrupted = create_version!(
+      serde, number: "1.0.228", platform: "", published_at: Time.utc(2026, 8, 1)
+    )
+    cargo_url = "https://crates.io/api/v1/crates/cargo-semver-checks/versions"
+    serde_url = "https://crates.io/api/v1/crates/serde/versions"
+    client = FixtureHelpers::FakeHTTPClient.new(cargo_url => json_fixture("cratesio_versions.json"))
+    allow(client).to receive(:get_json).and_wrap_original do |method, url, **kwargs|
+      raise Net::ReadTimeout, "timed out" if url == serde_url
+
+      method.call(url, **kwargs)
+    end
+    adapter = Ingestion::Adapters::Cratesio.new(
+      seed_dir: fixture_path("seed", "cratesio"), http_client: client
+    )
+
+    expect { operation.call(limit: 2, adapter:) }.to raise_error(Net::ReadTimeout)
+
+    expect(versions.by_pk(completed).one[:provenance_checked_at]).not_to be_nil
+    expect(versions.by_pk(interrupted).one[:provenance_checked_at]).to be_nil
   end
 
   it "records positive and negative checks and updates first_provenant_at" do

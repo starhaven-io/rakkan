@@ -35,6 +35,20 @@ module Ingestion
       # (as above) or nil when the registry reports none.
       def fetch_provenance(name:, number:, platform:) = raise NotImplementedError
 
+      # Live: yield each version and its provenance. Registries may override
+      # this to answer several versions with one request while retaining the
+      # per-version write boundary in RefreshProvenance.
+      def each_provenance(name:, versions:)
+        return enum_for(__method__, name:, versions:) unless block_given?
+
+        versions.each do |version|
+          provenance = fetch_provenance(
+            name:, number: version[:number], platform: version[:platform]
+          )
+          yield(version, provenance)
+        end
+      end
+
       # When the seed's package/version data was authoritative (nil when
       # unknown). Discovery can advance its cursor to this time.
       def seed_as_of = nil

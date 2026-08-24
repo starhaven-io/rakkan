@@ -5,8 +5,9 @@ module Ingestion
     # Ask the registry for provenance on versions we have not checked yet
     # (or not recently). Resumable by construction: each version's row is
     # updated as soon as it is checked, so an interrupted run just continues
-    # where it stopped. `limit` caps the versions put to the live API per run;
-    # registries with per-file provenance may make several requests per
+    # where it stopped. `limit` caps the versions put to the live API per run.
+    # Adapters may batch versions when one response can answer several of them;
+    # registries with per-file provenance may instead make several requests per
     # version. Versions published before the registry could record provenance
     # are settled in bulk outside that cap, since they cost no requests.
     # Convergent with registry state: checks bypass the response cache, and
@@ -34,15 +35,14 @@ module Ingestion
         checked = 0
         found = 0
 
-        candidates(registry.id, stale_after, limit, available_since, now).each do |row|
-          provenance = adapter.fetch_provenance(
-            name: row[:name], number: row[:number], platform: row[:platform]
-          )
-          attrs = (provenance || NO_PROVENANCE.dup)
-                  .merge(provenance_checked_at: now, updated_at: now)
-          package_versions.by_pk(row[:id]).command(:update).call(attrs)
-          checked += 1
-          found += 1 if provenance
+        candidate_batches(registry.id, stale_after, limit, available_since, now).each do |name, rows|
+          adapter.each_provenance(name:, versions: rows) do |row, provenance|
+            attrs = (provenance || NO_PROVENANCE.dup)
+                    .merge(provenance_checked_at: now, updated_at: now)
+            package_versions.by_pk(row[:id]).command(:update).call(attrs)
+            checked += 1
+            found += 1 if provenance
+          end
         end
 
         recompute_first_provenant_at(registry.id)
@@ -80,6 +80,12 @@ module Ingestion
           )
           .order(Sequel.desc(Sequel[:package_versions][:published_at]))
           .limit(limit)
+      end
+
+      def candidate_batches(registry_id, stale_after, limit, available_since, now)
+        candidates(registry_id, stale_after, limit, available_since, now).to_a.group_by do |row|
+          row[:name]
+        end
       end
 
       # The workflow consumes this count from the operation result instead of
