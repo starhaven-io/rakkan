@@ -1,0 +1,19 @@
+{
+  "versions": [
+    {
+      "crate": "cargo-semver-checks",
+      "num": "0.50.0",
+      "trustpub_data": {
+        "provider": "github",
+        "repository": "obi1kenobi/cargo-semver-checks",
+        "run_id": "30708975727",
+        "sha": "4297e8b5f6306531375ba2ba332171e5792b4c38"
+      }
+    },
+    {
+      "crate": "cargo-semver-checks",
+      "num": "0.43.0",
+      "trustpub_data": null
+    }
+  ]
+}

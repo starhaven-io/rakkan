@@ -24,6 +24,8 @@ module Ingestion
     DEFAULT_MIN_INTERVAL = 0.25
     HOST_MIN_INTERVALS = { "crates.io" => 1.0 }.freeze
     MAX_ATTEMPTS = 4
+    REQUEST_ID_LIMIT = 100
+    ERROR_DETAIL_LIMIT = 500
 
     class Error < StandardError
     end
@@ -53,7 +55,7 @@ module Ingestion
       when 404
         nil
       else
-        raise Error, "GET #{url} returned #{response.code}"
+        raise Error, "GET #{url} returned #{response.code}#{error_context(response)}"
       end
     end
 
@@ -71,7 +73,10 @@ module Ingestion
 
         response
       rescue RetryableError => e
-        raise Error, "GET #{url} failed after #{attempts} attempts (#{e.response.code})" if attempts >= MAX_ATTEMPTS
+        if attempts >= MAX_ATTEMPTS
+          raise Error,
+                "GET #{url} failed after #{attempts} attempts (#{e.response.code})#{error_context(e.response)}"
+        end
 
         @sleeper.call(retry_delay(e.response, attempts))
         retry
@@ -96,6 +101,38 @@ module Ingestion
     def retryable?(response)
       code = response.code.to_i
       code == 429 || code >= 500
+    end
+
+    def error_context(response)
+      request_id = sanitize(response["X-Request-Id"].to_s, REQUEST_ID_LIMIT)
+      detail = error_detail(response.body)
+      parts = []
+      parts << "request_id=#{request_id}" unless request_id.empty?
+      parts << detail if detail
+      parts.empty? ? "" : " (#{parts.join("; ")})"
+    end
+
+    def error_detail(body)
+      payload = JSON.parse(body.to_s)
+      return unless payload.is_a?(Hash)
+
+      detail = Array(payload["errors"]).filter_map do |error|
+        error["detail"] if error.is_a?(Hash)
+      end.first
+      return unless detail.is_a?(String)
+
+      normalized = sanitize(detail, ERROR_DETAIL_LIMIT)
+      return if normalized.empty?
+
+      normalized
+    rescue JSON::ParserError
+      nil
+    end
+
+    def sanitize(value, limit)
+      clean = value.encode(Encoding::UTF_8, invalid: :replace, undef: :replace)
+                   .gsub(/[[:cntrl:]]+/, " ").squeeze(" ").strip
+      clean.length <= limit ? clean : "#{clean[0, limit]}..."
     end
 
     # Retry-After is either delta-seconds or an HTTP-date (RFC 9110); honor

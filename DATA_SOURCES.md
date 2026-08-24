@@ -133,6 +133,12 @@ is not on the primary path.
   serde 1.0.228: `published_by` set, `trustpub_data: null`. So crates.io
   exposes trusted publishing directly in JSON; no cert parsing, and unlike
   RubyGems it also names the human pusher in the API.
+- `GET /api/v1/crates/<crate>/versions` returns those same version objects in
+  a batch. A 2026-08-23 live probe returned all 316 serde versions with
+  `meta.total: 316` and `meta.next_page: null`; the distilled trusted/plain
+  response is `spec/fixtures/api/cratesio_versions.json`. Completeness is not
+  assumed: the adapter falls back to the per-version endpoint for any selected
+  number absent from a batch response.
 - [crates.io documents `trustpub_data` as
   unstable](https://github.com/rust-lang/crates.io/blob/main/crates/crates_io_api_types/src/lib.rs).
   The adapter therefore maps only the small provider/repository/run/SHA shape

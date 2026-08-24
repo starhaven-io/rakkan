@@ -142,6 +142,66 @@ RSpec.describe Ingestion::HTTPClient do
         .to raise_error(described_class::Error, /returned 403/)
       expect(sleeps).to be_empty
     end
+
+    it "reports bounded registry diagnostics for non-retryable errors" do
+      detail = "Blocked by crawler policy.\nProvide request id abc123."
+      transport = lambda do |_uri, _headers|
+        response(403, body: JSON.generate({ "errors" => [nil, { "detail" => detail }] }),
+                      headers: { "X-Request-Id" => "abc123" })
+      end
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(
+          described_class::Error,
+          /returned 403 \(request_id=abc123; Blocked by crawler policy\. Provide request id abc123\.\)/
+        )
+      expect(sleeps).to be_empty
+    end
+
+    it "bounds long registry error details" do
+      detail = "x" * (described_class::ERROR_DETAIL_LIMIT + 1)
+      transport = lambda do |_uri, _headers|
+        response(403, body: JSON.generate({ "errors" => [{ "detail" => detail }] }))
+      end
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(described_class::Error) do |error|
+          expect(error.message).to end_with("#{"x" * described_class::ERROR_DETAIL_LIMIT}...)")
+          expect(error.message).not_to include("x" * (described_class::ERROR_DETAIL_LIMIT + 1))
+        end
+    end
+
+    it "bounds request IDs and strips diagnostic control characters" do
+      request_id = "#{"r" * 50}\e[2J#{"r" * 60}"
+      detail = "blocked \e[32mALL CLEAR\e[0m\u0000"
+      transport = lambda do |_uri, _headers|
+        response(403, body: JSON.generate({ "errors" => [{ "detail" => detail }] }),
+                      headers: { "X-Request-Id" => request_id })
+      end
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(described_class::Error) do |error|
+          sanitized_id = error.message[/request_id=([^;]+)/, 1]
+          expect(sanitized_id).to end_with("...")
+          expect(sanitized_id.length).to eq(described_class::REQUEST_ID_LIMIT + 3)
+          expect(error.message).not_to match(/[[:cntrl:]]/)
+        end
+    end
+
+    it "ignores malformed or empty registry error details" do
+      bodies = ["not JSON", '{"errors":[{"detail":123}]}', '{"errors":[{"detail":"  "}]}']
+
+      bodies.each do |body|
+        transport = ->(_uri, _headers) { response(403, body:) }
+        client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+        expect { client.get_json(url, ttl: 0) }
+          .to raise_error(described_class::Error, "GET #{url} returned 403")
+      end
+    end
   end
 
   describe "throttling" do

@@ -104,7 +104,39 @@ module Ingestion
         response = http_client.get_json(
           "#{API_BASE}/crates/#{path_segment(name)}/#{path_segment(number)}", ttl: 0
         )
-        trustpub = response&.dig("version", "trustpub_data")
+        provenance_from(response&.dig("version", "trustpub_data"))
+      end # rubocop:enable Lint/UnusedMethodArgument
+
+      # The versions endpoint exposes the same trustpub_data as the
+      # per-version endpoint. Fetching it once per crate substantially reduces
+      # the live API load during a backfill.
+      def each_provenance(name:, versions:)
+        return enum_for(__method__, name:, versions:) unless block_given?
+
+        response = http_client.get_json(
+          "#{API_BASE}/crates/#{path_segment(name)}/versions", ttl: 0
+        )
+        response_versions = response.is_a?(Hash) ? response["versions"] : nil
+        versions_by_number = Array(response_versions).each_with_object({}) do |version, index|
+          next unless version.is_a?(Hash) && version["num"].is_a?(String)
+
+          index[version["num"]] = version
+        end
+
+        versions.each do |version|
+          payload = versions_by_number[version[:number]]
+          provenance = if payload
+                         provenance_from(payload["trustpub_data"])
+                       else
+                         fetch_provenance(name:, number: version[:number], platform: version[:platform])
+                       end
+          yield(version, provenance)
+        end
+      end
+
+      private
+
+      def provenance_from(trustpub)
         return nil unless trustpub.is_a?(Hash)
 
         provider = trustpub["provider"].to_s.strip.downcase
@@ -123,9 +155,7 @@ module Ingestion
           run_url: run_url(provider, repository, run_id),
           attestation_count: 1
         }
-      end # rubocop:enable Lint/UnusedMethodArgument
-
-      private
+      end
 
       def path_segment(value)
         CGI.escape(value).gsub("+", "%20")

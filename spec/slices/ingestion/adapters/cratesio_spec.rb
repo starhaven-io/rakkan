@@ -113,6 +113,70 @@ RSpec.describe Ingestion::Adapters::Cratesio do
     expect(provenance).to be_nil
   end
 
+  it "returns nil when a version no longer exists" do
+    responses["https://crates.io/api/v1/crates/removed/1.0.0"] = nil
+
+    provenance = adapter.fetch_provenance(name: "removed", number: "1.0.0", platform: "")
+
+    expect(provenance).to be_nil
+  end
+
+  it "checks several versions of one crate with one API request" do
+    url = "https://crates.io/api/v1/crates/cargo-semver-checks/versions"
+    responses[url] = json_fixture("cratesio_versions.json")
+    versions = [{ number: "0.50.0", platform: "" }, { number: "0.43.0", platform: "" }]
+
+    results = adapter.each_provenance(name: "cargo-semver-checks", versions:).to_a
+
+    expect(results.map(&:first)).to eq(versions)
+    expect(results.first.last).to include(
+      provenance_kind: "trustpub_metadata",
+      source_repository: "https://github.com/obi1kenobi/cargo-semver-checks"
+    )
+    expect(results.last.last).to be_nil
+    expect(client.requests.last).to eq(url)
+    expect(client.ttls.last).to eq(0)
+  end
+
+  it "falls back to the per-version endpoint when a batch omits a requested version" do
+    batch_url = "https://crates.io/api/v1/crates/cargo-semver-checks/versions"
+    version_url = "https://crates.io/api/v1/crates/cargo-semver-checks/missing"
+    responses[batch_url] = json_fixture("cratesio_versions.json")
+    responses[version_url] = { "version" => { "trustpub_data" => nil } }
+    versions = [{ number: "missing", platform: "" }]
+
+    results = adapter.each_provenance(name: "cargo-semver-checks", versions:).to_a
+
+    expect(results).to eq([[versions.first, nil]])
+    expect(client.requests.last(2)).to eq([batch_url, version_url])
+  end
+
+  it "falls back to per-version 404 handling when a crate batch returns 404" do
+    batch_url = "https://crates.io/api/v1/crates/removed/versions"
+    version_url = "https://crates.io/api/v1/crates/removed/1.0.0"
+    responses[batch_url] = nil
+    responses[version_url] = nil
+    versions = [{ number: "1.0.0", platform: "" }]
+
+    results = adapter.each_provenance(name: "removed", versions:).to_a
+
+    expect(results).to eq([[versions.first, nil]])
+    expect(client.requests.last(2)).to eq([batch_url, version_url])
+  end
+
+  it "falls back when a batch contains malformed version entries" do
+    batch_url = "https://crates.io/api/v1/crates/example/versions"
+    version_url = "https://crates.io/api/v1/crates/example/1.0.0"
+    responses[batch_url] = { "versions" => [nil, { "num" => 123 }] }
+    responses[version_url] = { "version" => { "trustpub_data" => nil } }
+    versions = [{ number: "1.0.0", platform: "" }]
+
+    results = adapter.each_provenance(name: "example", versions:).to_a
+
+    expect(results).to eq([[versions.first, nil]])
+    expect(client.requests.last(2)).to eq([batch_url, version_url])
+  end
+
   # The GitLab variant names its fields project_path and job_id, not
   # repository and run_id; only sha is shared with the GitHub variant.
   it "maps a GitLab publisher from its own field names" do
