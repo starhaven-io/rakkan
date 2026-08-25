@@ -1,13 +1,26 @@
 export const EDGE_CACHE_CONTROL = 'public, max-age=1800';
+export const NOT_FOUND_CACHE_CONTROL = 'public, max-age=60, s-maxage=300';
 // The zone's Browser Cache TTL can raise a lower max-age, so client responses
 // deliberately forbid storage while the separate edge copy remains cacheable.
 export const BROWSER_CACHE_CONTROL = 'no-store';
 
-const CACHEABLE_PATH = /^\/$|^\/packages(\/[^/]+)?$|^\/sitemap\.xml$/;
+const CACHEABLE_PATH = /^\/$|^\/packages(\/[^/]+)?$|^\/cratesio(\/packages(\/[^/]+)?)?$|^\/sitemap\.xml$/;
 
 export interface EdgeCache {
   match(key: string): Promise<Response | undefined>;
   put(key: string, response: Response): Promise<void>;
+}
+
+interface MutableResponse {
+  status?: number;
+  headers: Headers;
+}
+
+// Astro only propagates response mutations made during route frontmatter;
+// calling this from a nested component is too late in response construction.
+export function markRouteNotFound(response: MutableResponse): void {
+  response.status = 404;
+  response.headers.set('cache-control', NOT_FOUND_CACHE_CONTROL);
 }
 
 export class GenerationTracker {

@@ -1,0 +1,9 @@
+---
+export const prerender = false;
+
+import RegistrySearch from '../../components/RegistrySearch.astro';
+
+const query = (Astro.url.searchParams.get('q') ?? '').trim();
+---
+
+<RegistrySearch slug="cratesio" query={query} />

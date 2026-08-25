@@ -6,10 +6,21 @@ import {
   EDGE_CACHE_CONTROL,
   GenerationTracker,
   isCacheableRequest,
+  markRouteNotFound,
+  NOT_FOUND_CACHE_CONTROL,
   serveVersionedPage,
   versionedCacheKey,
   type EdgeCache,
 } from '../src/lib/cache.ts';
+
+test('route-owned not-found responses set status and opt out of the generation cache', () => {
+  const response = { status: 200, headers: new Headers() };
+
+  markRouteNotFound(response);
+
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('cache-control'), NOT_FOUND_CACHE_CONTROL);
+});
 
 class MemoryCache implements EdgeCache {
   readonly entries = new Map<string, Response>();
@@ -109,10 +120,15 @@ test('only bare GET requests for rendered data pages use the shared cache', () =
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/'), true);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/packages'), true);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/packages/rake'), true);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio'), true);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/packages'), true);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/packages/serde'), true);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/sitemap.xml'), true);
 
   assert.equal(isCacheableRequest('POST', 'https://rakkan.dev/'), false);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/?q=rake'), false);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/about'), false);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/packages/rake/versions'), false);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/search'), false);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/packages/serde/versions'), false);
 });

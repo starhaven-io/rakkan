@@ -5,10 +5,10 @@ registries: which packages publish with verifiable provenance, adoption share
 among the most-downloaded packages, and trends over time. RubyGems.org is the
 first production registry; the schema and ingestion pipeline are
 registry-agnostic. crates.io has its tracked set committed in
-`seed/cratesio/`, reads provenance from the API, and can be selected by the
-ingestion tasks; what it still needs is the provenance backfill run. PyPI is
-still provenance-only and needs both a tracked set and a durable discovery
-cursor.
+`seed/cratesio/`, reads provenance from the API, has completed its initial
+production backfill, and is available in the web tier; ongoing observations
+still need automated seed regeneration. PyPI is still provenance-only and
+needs both a tracked set and a durable discovery cursor.
 Prefer reading the Hanami v3.0 guides (hanakai.org) or installed gem source
 over assuming framework APIs.
 

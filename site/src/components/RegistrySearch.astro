@@ -1,0 +1,85 @@
+---
+import Base from '../layouts/Base.astro';
+import { getDb } from '../lib/db.ts';
+import { registryByName, searchPackages } from '../lib/d1.ts';
+import { formatCount, packageNoun, searchResultSummary, shortDate } from '../lib/format.ts';
+import { registrySite, type RegistrySlug } from '../lib/registries.ts';
+
+interface Props {
+  slug: RegistrySlug;
+  query: string;
+}
+
+const { slug, query } = Astro.props;
+const site = registrySite(slug);
+const db = getDb();
+const registry = await registryByName(db, slug);
+const results = query && registry ? await searchPackages(db, registry.id, query) : [];
+---
+
+<Base registry={slug} title={`Search ${registry?.display_name ?? ''} · rakkan`} query={query}>
+  <header class="page-heading">
+    <h1>Search</h1>
+    <p>
+      The tracked set is the top 1,000 {packageNoun(registry?.name, 2)} by total downloads, or
+      <a href={site.packagesPath}>browse the full index</a>.
+    </p>
+  </header>
+
+  {
+    !query ? (
+      <section class="empty-state compact">
+        <h3>Search by package name</h3>
+        <p>Use the search field above.</p>
+      </section>
+    ) : results.length === 0 ? (
+      <section class="empty-state compact">
+        <h3>No tracked packages found</h3>
+        <p>
+          Nothing in {registry?.display_name ?? 'the active registry'} matches <code>{query}</code>.
+        </p>
+      </section>
+    ) : (
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h3>
+              Results for <code>{query}</code>
+            </h3>
+            <p>{searchResultSummary(registry?.name, registry?.display_name, results.length)}</p>
+          </div>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Package</th>
+                <th class="num">Rank</th>
+                <th class="num">Publishing provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((pkg) => (
+                <tr>
+                  <td>
+                    <a class="package-name" href={site.packagePath(pkg.name)}>
+                      {pkg.name}
+                    </a>
+                  </td>
+                  <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                  <td class="num">
+                    {pkg.first_provenant_at ? (
+                      <span class="badge yes">Since {shortDate(pkg.first_provenant_at)}</span>
+                    ) : (
+                      <span class="badge neutral">Not observed</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )
+  }
+</Base>

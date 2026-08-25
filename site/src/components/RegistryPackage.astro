@@ -1,0 +1,132 @@
+---
+import Base from '../layouts/Base.astro';
+import type { PackageRow, Registry, VersionRow } from '../lib/d1.ts';
+import { formatCount, provenanceLabel, repositoryLabel, safeHttpsUrl, shortDate } from '../lib/format.ts';
+import { registrySite, type RegistrySlug } from '../lib/registries.ts';
+
+interface Props {
+  slug: RegistrySlug;
+  registry: Registry | null;
+  pkg: PackageRow | null;
+  versions: VersionRow[];
+}
+
+const { slug, registry, pkg, versions } = Astro.props;
+const site = registrySite(slug);
+---
+
+<Base registry={slug} title={pkg ? `${pkg.name} · rakkan` : 'Package not found · rakkan'}>
+  {
+    !registry || !pkg ? (
+      <section class="empty-state">
+        <h1>Package not found</h1>
+        <p>That package is not in the selected registry's tracked set.</p>
+        <a href={site.packagesPath}>Browse tracked packages →</a>
+      </section>
+    ) : (
+      <>
+        <a class="back-link" href={site.overviewPath}>
+          ← {registry.display_name} overview
+        </a>
+
+        <section class="package-hero">
+          <div class="hero-copy">
+            <h1 class="package-name">{pkg.name}</h1>
+            {pkg.first_provenant_at ? (
+              <span class="badge yes">Provenance since {shortDate(pkg.first_provenant_at)}</span>
+            ) : (
+              <span class="badge neutral">No provenance observed</span>
+            )}
+            {pkg.tracked !== 1 && <span class="badge neutral">No longer in the tracked set</span>}
+            <div class="package-meta">
+              {pkg.rank != null && (
+                <span>
+                  Rank <strong>#{formatCount(pkg.rank)}</strong>
+                </span>
+              )}
+              <span>
+                <strong>{formatCount(pkg.downloads_total ?? 0)}</strong> downloads
+              </span>
+              <span>
+                <strong>{formatCount(versions.length)}</strong> recorded versions
+              </span>
+            </div>
+          </div>
+          <div class="hero-actions">
+            <a href={site.packageUrl(pkg.name)}>{registry.display_name} ↗</a>
+          </div>
+        </section>
+
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <h3>Release provenance</h3>
+              <p>{site.releaseDescription}</p>
+            </div>
+            <span class="panel-meta">{versions.length} versions</span>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Version</th>
+                  <th>Platform</th>
+                  <th>Published</th>
+                  <th>Provenance</th>
+                  <th>Source</th>
+                </tr>
+              </thead>
+              <tbody>
+                {versions.map((version) => {
+                  const repoUrl = safeHttpsUrl(version.source_repository);
+                  const runUrl = safeHttpsUrl(version.run_url);
+                  return (
+                    <tr>
+                      <td>
+                        <span class="package-name">{version.number}</span>
+                        <span class="version-flags">
+                          {version.prerelease === 1 && <span class="badge neutral">Pre</span>}
+                          {version.yanked === 1 && <span class="badge danger">Yanked</span>}
+                        </span>
+                      </td>
+                      <td>{version.platform || '—'}</td>
+                      <td class="date-cell">{shortDate(version.published_at)}</td>
+                      <td>
+                        {version.provenance_kind ? (
+                          <span class="badge yes">
+                            {provenanceLabel(version.provenance_kind)}
+                            {version.attestation_count > 1 ? ` ×${version.attestation_count}` : ''}
+                          </span>
+                        ) : version.provenance_checked_at ? (
+                          <span class="badge neutral">None observed</span>
+                        ) : (
+                          <span class="faint">Unchecked</span>
+                        )}
+                      </td>
+                      <td>
+                        {repoUrl ? (
+                          <span class="source-links">
+                            <a href={repoUrl}>{repositoryLabel(repoUrl)}</a>
+                            {runUrl && (
+                              <a class="run-link" href={runUrl}>
+                                Build run ↗
+                              </a>
+                            )}
+                          </span>
+                        ) : version.source_repository ? (
+                          <span class="faint">{version.source_repository}</span>
+                        ) : (
+                          <span class="faint">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </>
+    )
+  }
+</Base>

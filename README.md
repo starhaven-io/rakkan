@@ -13,10 +13,11 @@ most-downloaded packages have adopted it, and how that changes over time.
 
 RubyGems.org is the first production registry. The schema and ingestion
 pipeline are registry-agnostic: crates.io carries its tracked set in
-`seed/cratesio/` and reads provenance from the API, with its provenance
-backfill still to run, and PyPI reads provenance while its tracked set and
-discovery cursor remain the next implementation phase. The ingestion engine
-is built with [Hanami 3.0](https://hanakai.org/hanami).
+`seed/cratesio/`, reads provenance from the API, has completed its initial
+production backfill, and is exposed by the web tier. Automating crates.io seed
+regeneration remains to do, and PyPI reads provenance while its tracked set
+and discovery cursor remain the next implementation phase. The ingestion
+engine is built with [Hanami 3.0](https://hanakai.org/hanami).
 
 Where the provenance signal actually lives, with recorded evidence, is
 documented in [DATA_SOURCES.md](DATA_SOURCES.md). Headline: for RubyGems it
@@ -98,16 +99,17 @@ RubyGems seed run the same ingestion and export path as a dry run. They never
 replace production D1 or change production refresh-issue state; publication is
 limited to scheduled and explicitly dispatched runs.
 
-The same workflow is the crates.io provenance-backfill entry point. Dispatch it
-with `registry=cratesio` and `refresh_limit=1000`, then repeat until the job
-summary reports zero tracked versions unchecked. Each run restores the prior D1
-state, re-seeds idempotently from the committed crates.io dump, settles releases
-from before trusted publishing existed without API calls, and persists the next
-bounded batch. It records the first crates.io snapshot only after the backfill
-is complete, so a partial observation is not presented as an adoption point.
-The snapshot is dated to the committed dump rather than the dispatch, so
-rerunning an unchanged seed replaces that observation instead of adding a flat
-point on an arbitrary day.
+The same workflow is the crates.io refresh entry point. The initial production
+backfill completed against the 2026-08-21 dump. After committing a regenerated
+crates.io seed, dispatch with `registry=cratesio` and `refresh_limit=1000`, then
+repeat until the job summary reports zero tracked versions unchecked. Each run
+restores the prior D1 state, re-seeds idempotently from the committed crates.io
+dump, settles releases from before trusted publishing existed without API
+calls, and persists the next bounded batch. It records a crates.io snapshot
+only after the refresh is complete, so a partial observation is not presented
+as an adoption point. The snapshot is dated to the committed dump rather than
+the dispatch, so rerunning an unchanged seed replaces that observation instead
+of adding a flat point on an arbitrary day.
 Refresh retries share a 30-minute wall-clock budget, and the engine reports the
 authoritative remaining backlog from the same scope it uses to select work.
 
