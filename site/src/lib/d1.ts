@@ -49,6 +49,12 @@ export interface VersionRow {
   provenance_checked_at: string | null;
 }
 
+export interface PackageDetail {
+  registry: Registry | null;
+  pkg: PackageRow | null;
+  versions: VersionRow[];
+}
+
 export async function exportGeneratedAt(db: D1): Promise<string | null> {
   const row = await db.prepare('SELECT generated_at FROM export_meta LIMIT 1').first<{ generated_at: string }>();
   return row?.generated_at ?? null;
@@ -146,6 +152,13 @@ export async function versionsOf(db: D1, registryId: number, name: string): Prom
     .bind(registryId, name)
     .all<VersionRow>();
   return results;
+}
+
+export async function loadPackageDetail(db: D1, registryName: string, packageName: string): Promise<PackageDetail> {
+  const registry = await registryByName(db, registryName);
+  const pkg = registry ? await packageByName(db, registry.id, packageName) : null;
+  const versions = registry && pkg ? await versionsOf(db, registry.id, pkg.name) : [];
+  return { registry, pkg, versions };
 }
 
 export async function searchPackages(db: D1, registryId: number, query: string, limit = 50): Promise<PackageRow[]> {

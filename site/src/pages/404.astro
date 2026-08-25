@@ -2,22 +2,20 @@
 export const prerender = false;
 
 import Base from '../layouts/Base.astro';
+import { markRouteNotFound } from '../lib/cache.ts';
+import { registrySite, registrySlugForPath } from '../lib/registries.ts';
 
-// SSR so the status is a real 404, both for unmatched routes (the adapter
-// serves this page) and for package names the tracker has never recorded
-// (the detail page rewrites here; formerly tracked packages still render).
-// Brief edge cache, and no freshness lookup, so a URL sweep cannot ride
-// misses to D1.
-Astro.response.status = 404;
-Astro.response.headers.set('cache-control', 'public, max-age=60, s-maxage=300');
+const slug = registrySlugForPath(Astro.url.pathname);
+const site = registrySite(slug);
+markRouteNotFound(Astro.response);
 ---
 
-<Base title="Not found · rakkan" freshness={false}>
+<Base registry={slug} title="Not found · rakkan" freshness={false}>
   <section class="empty-state">
     <h1>Not found</h1>
     <p>
       No such page, or a package this tracker has never recorded.
-      <a href="/packages">Browse the full index</a> or search above.
+      <a href={site.packagesPath}>Browse the full index</a> or search above.
     </p>
   </section>
 </Base>

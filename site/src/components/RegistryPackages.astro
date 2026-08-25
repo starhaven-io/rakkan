@@ -1,0 +1,68 @@
+---
+import Base from '../layouts/Base.astro';
+import { getDb } from '../lib/db.ts';
+import { allTracked, registryByName } from '../lib/d1.ts';
+import { formatCount, packageNoun, shortDate } from '../lib/format.ts';
+import { registrySite, type RegistrySlug } from '../lib/registries.ts';
+
+interface Props {
+  slug: RegistrySlug;
+}
+
+const { slug } = Astro.props;
+const site = registrySite(slug);
+const db = getDb();
+const registry = await registryByName(db, slug);
+const packages = registry ? await allTracked(db, registry.id) : [];
+const provenant = packages.filter((pkg) => pkg.first_provenant_at).length;
+const noun = packageNoun(registry?.name, 2);
+---
+
+<Base registry={slug} title={`All ${noun} · rakkan`}>
+  <header class="page-heading">
+    <h1>All tracked {noun}</h1>
+    <p>
+      The full tracked set: the top {formatCount(packages.length)}
+      {noun} on{' '}
+      {registry?.display_name ?? 'the registry'} by total downloads, in rank order.{' '}
+      {formatCount(provenant)} carry provenance on at least one release.
+    </p>
+  </header>
+
+  <section class="panel">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th class="num">Rank</th>
+            <th>Package</th>
+            <th class="num hide-mobile">Downloads</th>
+            <th class="num">Provenance</th>
+          </tr>
+        </thead>
+        <tbody>
+          {
+            packages.map((pkg) => (
+              <tr>
+                <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                <td>
+                  <a class="package-name" href={site.packagePath(pkg.name)}>
+                    {pkg.name}
+                  </a>
+                </td>
+                <td class="num hide-mobile">{formatCount(pkg.downloads_total ?? 0)}</td>
+                <td class="num">
+                  {pkg.first_provenant_at ? (
+                    <span class="badge yes">Since {shortDate(pkg.first_provenant_at)}</span>
+                  ) : (
+                    <span class="badge neutral">Not observed</span>
+                  )}
+                </td>
+              </tr>
+            ))
+          }
+        </tbody>
+      </table>
+    </div>
+  </section>
+</Base>

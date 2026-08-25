@@ -3,14 +3,22 @@ import '../styles/site.css';
 import { getDb } from '../lib/db.ts';
 import { exportGeneratedAt } from '../lib/d1.ts';
 import { utcStamp } from '../lib/format.ts';
+import { registrySite, type RegistrySlug } from '../lib/registries.ts';
 
 interface Props {
   title?: string;
   query?: string;
   freshness?: boolean;
+  registry?: RegistrySlug;
 }
 
-const { title = 'rakkan · trusted publishing adoption', query = '', freshness = true } = Astro.props;
+const {
+  title = 'rakkan · trusted publishing adoption',
+  query = '',
+  freshness = true,
+  registry = 'rubygems',
+} = Astro.props;
+const registryPaths = registrySite(registry);
 
 // Export-generation note in the header. It intentionally describes the whole
 // D1 artifact rather than claiming that the registry displayed on a page was
@@ -50,12 +58,20 @@ const favicon =
           </span>
         </a>
         <nav class="registry-nav" aria-label="Package registries">
-          <a class="registry-tab active" href="/" aria-current="page">RubyGems.org</a>
-          <span class="registry-tab future">crates.io <small>next</small></span>
+          <a
+            class:list={['registry-tab', { active: registry === 'rubygems' }]}
+            href="/"
+            aria-current={registry === 'rubygems' ? 'page' : undefined}>RubyGems.org</a
+          >
+          <a
+            class:list={['registry-tab', { active: registry === 'cratesio' }]}
+            href="/cratesio"
+            aria-current={registry === 'cratesio' ? 'page' : undefined}>crates.io</a
+          >
           <span class="nav-sep" aria-hidden="true"></span>
-          <a class="registry-tab" href="/packages">All packages</a>
+          <a class="registry-tab" href={registryPaths.packagesPath}>All packages</a>
         </nav>
-        <form class="site-search" action="/search" method="get">
+        <form class="site-search" action={registryPaths.searchPath} method="get">
           <input
             type="search"
             name="q"

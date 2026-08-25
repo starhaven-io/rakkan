@@ -7,6 +7,7 @@ import {
   allTracked,
   exportGeneratedAt,
   latestSnapshot,
+  loadPackageDetail,
   packageByName,
   recentConversions,
   registryByName,
@@ -170,4 +171,29 @@ test('version and search queries execute against the exported SQLite shape', asy
     (await searchPackages(db, 2, 'rack', 10)).map((pkg) => pkg.name),
     ['rack-main'],
   );
+});
+
+test('package detail loading keeps package and versions inside one registry', async (t) => {
+  const db = database(t);
+
+  const rubygems = await loadPackageDetail(db, 'rubygems', 'rack-main');
+  const cratesio = await loadPackageDetail(db, 'cratesio', 'rack-main');
+  const missingPackage = await loadPackageDetail(db, 'cratesio', 'missing');
+  const missingRegistry = await loadPackageDetail(db, 'missing', 'rack-main');
+
+  assert.equal(rubygems.registry?.name, 'rubygems');
+  assert.equal(rubygems.pkg?.name, 'rack-main');
+  assert.deepEqual(
+    rubygems.versions.map((version) => version.number),
+    ['2.0.0', '1.0.0'],
+  );
+  assert.equal(cratesio.registry?.name, 'cratesio');
+  assert.equal(cratesio.pkg?.name, 'rack-main');
+  assert.deepEqual(
+    cratesio.versions.map((version) => version.number),
+    ['3.0.0'],
+  );
+  assert.equal(missingPackage.pkg, null);
+  assert.deepEqual(missingPackage.versions, []);
+  assert.deepEqual(missingRegistry, { registry: null, pkg: null, versions: [] });
 });

@@ -1,0 +1,14 @@
+---
+export const prerender = false;
+
+import RegistryPackage from '../../../components/RegistryPackage.astro';
+import { markRouteNotFound } from '../../../lib/cache.ts';
+import { getDb } from '../../../lib/db.ts';
+import { loadPackageDetail } from '../../../lib/d1.ts';
+
+const name = Astro.params.name ?? '';
+const { registry, pkg, versions } = await loadPackageDetail(getDb(), 'cratesio', name);
+if (!registry || !pkg) markRouteNotFound(Astro.response);
+---
+
+<RegistryPackage slug="cratesio" registry={registry} pkg={pkg} versions={versions} />

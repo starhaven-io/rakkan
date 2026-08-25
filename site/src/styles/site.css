@@ -99,17 +99,6 @@ input {
   border-bottom: 2px solid var(--seal);
   padding-bottom: 0.1rem;
 }
-.registry-tab.future {
-  color: var(--ink-faint);
-  font-weight: 400;
-  cursor: default;
-}
-.registry-tab small {
-  font-size: 0.7em;
-  color: var(--ink-faint);
-  margin-left: 0.25rem;
-}
-
 .nav-sep {
   width: 1px;
   height: 1.05rem;
