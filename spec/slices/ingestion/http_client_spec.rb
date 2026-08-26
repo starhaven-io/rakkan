@@ -244,4 +244,154 @@ RSpec.describe Ingestion::HTTPClient do
       expect(sleeps).to be_empty
     end
   end
+
+  describe "streaming downloads" do
+    let(:dump_url) { "https://static.crates.io/db-dump.tar.gz" }
+    let(:destination) { File.join(cache_dir, "db-dump.tar.gz") }
+
+    it "writes through an atomic partial file with identifying headers" do
+      download_transport = lambda do |uri, headers, partial|
+        expect(uri.to_s).to eq(dump_url)
+        expect(headers).to include(
+          "User-Agent" => described_class::USER_AGENT,
+          "Accept" => described_class::DOWNLOAD_ACCEPT,
+          "Accept-Encoding" => "identity"
+        )
+        expect(partial).to eq("#{destination}.part")
+        File.binwrite(partial, "archive")
+        response(200, headers: { "Content-Length" => "7" })
+      end
+      client = described_class.new(cache_dir:, download_transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect(client.download(dump_url, destination:)).to eq(bytes: 7)
+      expect(File.binread(destination)).to eq("archive")
+      expect(File).not_to exist("#{destination}.part")
+    end
+
+    it "preserves an existing destination when a download fails" do
+      File.binwrite(destination, "existing")
+      download_transport = ->(_uri, _headers, _partial) { response(403) }
+      client = described_class.new(cache_dir:, download_transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:) }
+        .to raise_error(described_class::Error, /returned 403/)
+      expect(File.binread(destination)).to eq("existing")
+      expect(File).not_to exist("#{destination}.part")
+    end
+
+    it "rejects a truncated response without replacing the destination" do
+      File.binwrite(destination, "existing")
+      download_transport = lambda do |_uri, _headers, partial|
+        File.binwrite(partial, "short")
+        response(200, headers: { "Content-Length" => "10" })
+      end
+      client = described_class.new(cache_dir:, download_transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:) }
+        .to raise_error(described_class::Error, /received 5 bytes; expected 10/)
+      expect(File.binread(destination)).to eq("existing")
+      expect(File).not_to exist("#{destination}.part")
+    end
+
+    it "streams the default Net::HTTP response body without buffering it" do
+      streamed = response(200)
+      streamed.define_singleton_method(:read_body) do |&block|
+        %w[arch ive].each(&block)
+      end
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) do |request, &block|
+        expect(request["User-Agent"]).to eq(described_class::USER_AGENT)
+        expect(request["Accept-Encoding"]).to eq("identity")
+        block.call(streamed)
+      end
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock:)
+
+      expect(client.download(dump_url, destination:)).to eq(bytes: 7)
+      expect(File.binread(destination)).to eq("archive")
+    end
+
+    it "follows the official HTTPS CDN redirect" do
+      redirected = response(
+        307,
+        headers: { "Location" => "https://cloudfront-static.crates.io/db-dump.tar.gz" }
+      )
+      streamed = response(200, headers: { "Content-Length" => "7" })
+      streamed.define_singleton_method(:read_body) { |&block| block.call("archive") }
+      responses = [redirected, streamed]
+      hosts = []
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(responses.shift) }
+      allow(Net::HTTP).to receive(:start) do |host, _port, **_options, &block|
+        hosts << host
+        block.call(http)
+      end
+      time = 0.0
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock: -> { time += 1.0 })
+
+      expect(client.download(dump_url, destination:)).to eq(bytes: 7)
+      expect(hosts).to eq(%w[static.crates.io cloudfront-static.crates.io])
+      expect(File.binread(destination)).to eq("archive")
+      expect(sleeps).to be_empty
+    end
+
+    it "rejects redirects away from the approved CDN" do
+      redirected = response(302, headers: { "Location" => "https://example.com/db-dump.tar.gz" })
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(redirected) }
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:) }
+        .to raise_error(described_class::Error, /redirected to an unapproved location/)
+      expect(File).not_to exist(destination)
+    end
+
+    it "retries a transient interruption from a clean partial file" do
+      interrupted = response(200)
+      interrupted.define_singleton_method(:read_body) do |&block|
+        block.call("stale")
+        raise Net::ReadTimeout, "stream"
+      end
+      streamed = response(200, headers: { "Content-Length" => "7" })
+      streamed.define_singleton_method(:read_body) { |&block| block.call("archive") }
+      responses = [interrupted, streamed]
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(responses.shift) }
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      time = 0.0
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock: -> { time += 1.0 })
+
+      expect(client.download(dump_url, destination:)).to eq(bytes: 7)
+      expect(File.binread(destination)).to eq("archive")
+      expect(sleeps).to eq([2])
+      expect(File).not_to exist("#{destination}.part")
+    end
+
+    it "bounds repeated transport failures" do
+      allow(Net::HTTP).to receive(:start).and_raise(Net::ReadTimeout, "stream")
+      time = 0.0
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock: -> { time += 1.0 })
+
+      expect { client.download(dump_url, destination:) }
+        .to raise_error(described_class::Error, /failed after 4 attempts \(Net::ReadTimeout\)/)
+      expect(sleeps).to eq([2, 4, 8])
+      expect(File).not_to exist(destination)
+      expect(File).not_to exist("#{destination}.part")
+    end
+
+    it "reads a failed default response so registry diagnostics remain available" do
+      blocked = response(
+        403,
+        body: JSON.generate({ "errors" => [{ "detail" => "crawler blocked" }] })
+      )
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(blocked) }
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:) }
+        .to raise_error(described_class::Error, /returned 403 \(crawler blocked\)/)
+    end
+  end
 end

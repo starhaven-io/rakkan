@@ -113,6 +113,15 @@ of adding a flat point on an arbitrary day.
 Refresh retries share a 30-minute wall-clock budget, and the engine reports the
 authoritative remaining backlog from the same scope it uses to select work.
 
+The manually dispatched `Measure crates.io seed refresh` workflow is the
+production-isolated precursor to scheduling that seed regeneration. It streams
+the current daily dump into runner-temporary storage, extracts it, rebuilds the
+top-1,000 seed, and reports phase timings, archive and seed sizes, builder peak
+memory, and disk consumption. It has no Cloudflare environment or secrets and
+does not upload artifacts, change the committed seed, or write production data.
+Those measurements determine whether the eventual scheduled refresh can safely
+run as one job or should pass the compact generated seed to a second job.
+
 Schema changes that site queries depend on must land before the corresponding
 site change: merge the schema, dispatch `Refresh Data`, then merge the site
 query. Push runs are deliberately dry runs and cannot order those production

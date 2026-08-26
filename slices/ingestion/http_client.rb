@@ -4,11 +4,12 @@ require "digest"
 require "fileutils"
 require "json"
 require "net/http"
+require "openssl"
 require "time"
 require "uri"
 
 module Ingestion
-  # Polite HTTP JSON client for registry APIs.
+  # Polite HTTP client for registry APIs and bulk data.
   #
   # - Identifying User-Agent on every request.
   # - Per-host request spacing, including crates.io's 1 req/s ceiling.
@@ -21,21 +22,46 @@ module Ingestion
   class HTTPClient
     USER_AGENT = "rakkan/0.1 (trusted publishing adoption tracker; +https://rakkan.dev)"
     DEFAULT_ACCEPT = "application/json"
+    DOWNLOAD_ACCEPT = "application/octet-stream"
     DEFAULT_MIN_INTERVAL = 0.25
-    HOST_MIN_INTERVALS = { "crates.io" => 1.0 }.freeze
+    HOST_MIN_INTERVALS = {
+      "crates.io" => 1.0,
+      "static.crates.io" => 1.0,
+      "cloudfront-static.crates.io" => 1.0
+    }.freeze
+    DOWNLOAD_REDIRECT_HOSTS = {
+      "static.crates.io" => %w[cloudfront-static.crates.io].freeze
+    }.freeze
+    MAX_DOWNLOAD_REDIRECTS = 3
     MAX_ATTEMPTS = 4
     REQUEST_ID_LIMIT = 100
     ERROR_DETAIL_LIMIT = 500
+    RETRYABLE_TRANSPORT_ERRORS = [
+      Net::OpenTimeout,
+      Net::ReadTimeout,
+      Net::WriteTimeout,
+      OpenSSL::SSL::SSLError,
+      SocketError,
+      EOFError,
+      Errno::ECONNREFUSED,
+      Errno::ECONNRESET,
+      Errno::EHOSTUNREACH,
+      Errno::ENETUNREACH,
+      Errno::EPIPE,
+      Errno::ETIMEDOUT
+    ].freeze
 
     class Error < StandardError
     end
 
     def initialize(cache_dir: Hanami.app.root.join("var", "cache", "http").to_s,
                    transport: nil,
+                   download_transport: nil,
                    sleeper: Kernel.method(:sleep),
                    clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @cache_dir = cache_dir
       @transport = transport || method(:default_transport)
+      @download_transport = download_transport || method(:default_download_transport)
       @sleeper = sleeper
       @clock = clock
       @last_request_at = {}
@@ -59,16 +85,42 @@ module Ingestion
       end
     end
 
+    # Stream a binary response to an atomic destination path. The public dump
+    # is too large to buffer in memory or retain in the JSON response cache.
+    def download(url, destination:, accept: DOWNLOAD_ACCEPT)
+      destination = File.expand_path(destination)
+      partial = "#{destination}.part"
+      FileUtils.mkdir_p(File.dirname(destination))
+
+      transport = lambda do |uri, headers|
+        FileUtils.rm_f(partial)
+        @download_transport.call(uri, headers.merge("Accept-Encoding" => "identity"), partial)
+      end
+      response = fetch_with_backoff(url, accept:, transport:)
+      raise Error, "GET #{url} returned #{response.code}#{error_context(response)}" unless response.code.to_i == 200
+
+      bytes = File.size(partial)
+      content_length = response["Content-Length"].to_s
+      if content_length.match?(/\A\d+\z/) && bytes != content_length.to_i
+        raise Error, "GET #{url} received #{bytes} bytes; expected #{content_length}"
+      end
+
+      File.rename(partial, destination)
+      { bytes: }
+    ensure
+      FileUtils.rm_f(partial) if partial
+    end
+
     private
 
-    def fetch_with_backoff(url, accept:)
+    def fetch_with_backoff(url, accept:, transport: @transport)
       attempts = 0
       uri = URI(url)
       headers = { "User-Agent" => USER_AGENT, "Accept" => accept }
       begin
         attempts += 1
         throttle(uri.host)
-        response = @transport.call(uri, headers)
+        response = transport.call(uri, headers)
         raise RetryableError, response if retryable?(response)
 
         response
@@ -80,6 +132,11 @@ module Ingestion
 
         @sleeper.call(retry_delay(e.response, attempts))
         retry
+      rescue RetryableTransportError => e
+        raise Error, "GET #{url} failed after #{attempts} attempts (#{e.original.class})" if attempts >= MAX_ATTEMPTS
+
+        @sleeper.call(2**attempts)
+        retry
       end
     end
 
@@ -89,12 +146,65 @@ module Ingestion
       end
     end
 
+    def default_download_transport(uri, headers, destination, redirects: 0)
+      response = nil
+      redirect_uri = nil
+      Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 120) do |http|
+        request = Net::HTTP::Get.new(uri)
+        headers.each { |name, value| request[name] = value }
+        http.request(request) do |candidate|
+          response = candidate
+          if candidate.code.to_i == 200
+            File.open(destination, "wb") do |file|
+              candidate.read_body { |chunk| file.write(chunk) }
+            end
+          else
+            candidate.body
+            if candidate.code.to_i.between?(300, 399)
+              redirect_uri = permitted_download_redirect(uri, candidate["Location"], redirects:)
+            end
+          end
+        end
+      end
+      return response unless redirect_uri
+
+      throttle(redirect_uri.host)
+      default_download_transport(redirect_uri, headers, destination, redirects: redirects + 1)
+    rescue *RETRYABLE_TRANSPORT_ERRORS => e
+      raise RetryableTransportError.new(e), cause: e
+    end
+
+    def permitted_download_redirect(uri, location, redirects:)
+      return if location.to_s.empty?
+
+      raise Error, "GET #{uri} exceeded #{MAX_DOWNLOAD_REDIRECTS} redirects" if redirects >= MAX_DOWNLOAD_REDIRECTS
+
+      redirect_uri = URI.join(uri.to_s, location)
+      allowed_hosts = [uri.host, *DOWNLOAD_REDIRECT_HOSTS.fetch(uri.host, [])]
+      allowed = redirect_uri.is_a?(URI::HTTPS) && redirect_uri.port == 443 &&
+                redirect_uri.userinfo.nil? && allowed_hosts.include?(redirect_uri.host)
+      raise Error, "GET #{uri} redirected to an unapproved location" unless allowed
+
+      redirect_uri
+    rescue URI::InvalidURIError
+      raise Error, "GET #{uri} returned an invalid redirect location"
+    end
+
     class RetryableError < StandardError
       attr_reader :response
 
       def initialize(response)
         @response = response
         super("HTTP #{response.code}")
+      end
+    end
+
+    class RetryableTransportError < StandardError
+      attr_reader :original
+
+      def initialize(original)
+        @original = original
+        super(original.class.name)
       end
     end
 
