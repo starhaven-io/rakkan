@@ -1,6 +1,6 @@
 name: Refresh crates.io after seed merge
 
-# The updater's branch push intentionally triggers nothing; the human-opened PR is the CI boundary.
+# The updater's branch push intentionally triggers nothing; the bot-opened PR is the CI boundary.
 on:
   pull_request:
     types: [closed]

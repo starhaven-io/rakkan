@@ -7,8 +7,8 @@ first production registry; the schema and ingestion pipeline are
 registry-agnostic. crates.io has its tracked set committed in
 `seed/cratesio/`, reads provenance from the API, has completed its initial
 production backfill, and is available in the web tier. A weekly workflow
-regenerates its tracked set on an automation branch; a human-opened, reviewed
-seed PR must merge before the protected production refresh is dispatched.
+regenerates its tracked set on an automation branch; a bot-opened,
+human-reviewed seed PR must merge before the protected production refresh is dispatched.
 PyPI is still provenance-only and needs both a tracked set and a durable
 discovery cursor.
 Prefer reading the Hanami v3.0 guides (hanakai.org) or installed gem source

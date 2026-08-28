@@ -13,8 +13,9 @@ distilled from.
   (https://static.crates.io/db-dump.tar.gz), around 1.8 GB. That dump
   carries no trusted-publishing metadata, so its versions are seeded
   unchecked and their provenance is established from the API instead. A
-  weekly workflow proposes semantic seed changes on a fixed automation branch;
-  publication follows only after a human opens, reviews, and merges that PR.
+  weekly workflow proposes semantic seed changes as a bot-opened PR from a
+  fixed automation branch; publication follows only after a human reviews
+  and merges it.
 
 Rights in the underlying registry records remain with their respective
 owners and are governed by each registry's terms of service; rakkan does
