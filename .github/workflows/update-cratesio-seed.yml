@@ -23,7 +23,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
-      contents: write # required only to update the automation-owned branch
+      contents: read
+    outputs:
+      base_sha: ${{ github.sha }}
+      update_required: ${{ steps.seed.outputs.update_required }}
+      dump_taken_at: ${{ steps.seed.outputs.dump_taken_at }}
+      source_commit: ${{ steps.seed.outputs.source_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,7 +45,7 @@ jobs:
             echo "::error::/usr/bin/time is not available on this runner"
             exit 1
           fi
-          for tool in gh gzip jq tar; do
+          for tool in gzip jq tar; do
             if ! command -v "${tool}" >/dev/null; then
               echo "::error::${tool} is not available on this runner"
               exit 1
@@ -168,93 +173,20 @@ jobs:
             echo "- Tracked versions: ${versions}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Update automation branch
+      - name: Package seed candidate
         if: steps.seed.outputs.update_required == 'true'
-        env:
-          AUTOMATION_BRANCH: automation/cratesio-seed
-          DUMP_TAKEN_AT: ${{ steps.seed.outputs.dump_taken_at }}
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          SOURCE_COMMIT: ${{ steps.seed.outputs.source_commit }}
         run: |
-          title="chore(data): refresh crates.io seed"
-          bot_user="github-actions[bot]"
-          bot_id="$(gh api "/users/${bot_user}" --jq .id)"
-          bot_email="${bot_id}+${bot_user}@users.noreply.github.com"
-          base_sha="${GITHUB_SHA}"
+          tar --create --gzip --file="${RUNNER_TEMP}/cratesio-seed-candidate.tgz" \
+            --directory="${GENERATED_SEED}" manifest.json top_1000.tsv tracked_versions.tsv.gz
 
-          if gh api "repos/${REPOSITORY}/git/ref/heads/${AUTOMATION_BRANCH}" >/dev/null 2>&1; then
-            gh api "repos/${REPOSITORY}/git/refs/heads/${AUTOMATION_BRANCH}" \
-              --method PATCH \
-              --field "sha=${base_sha}" \
-              --field force=true
-          else
-            gh api "repos/${REPOSITORY}/git/refs" \
-              --method POST \
-              --field "ref=refs/heads/${AUTOMATION_BRANCH}" \
-              --field "sha=${base_sha}"
-          fi
-
-          commit_body="Signed-off-by: ${bot_user} <${bot_email}>"
-
-          # The encoded version seed is far larger than the kernel's per-argument
-          # limit, so the mutation payload must reach gh through a file, never
-          # through argv or the environment.
-          payload_file="${RUNNER_TEMP}/create-seed-commit.json"
-          # shellcheck disable=SC2016 # $input is a GraphQL variable, not shell
-          # shellcheck disable=SC2016 # $input is a GraphQL variable, not shell
-          TITLE="${title}" COMMIT_BODY="${commit_body}" BASE_SHA="${base_sha}" \
-                    PAYLOAD_FILE="${payload_file}" ruby -rjson -e '
-            seed = ENV.fetch("GENERATED_SEED")
-            names = %w[manifest.json top_1000.tsv tracked_versions.tsv.gz]
-            additions = names.map do |name|
-              {
-                path: "seed/cratesio/#{name}",
-                contents: [File.binread(File.join(seed, name))].pack("m0")
-              }
-            end
-            payload = {
-              query: "mutation($input: CreateCommitOnBranchInput!) " \
-                     "{ createCommitOnBranch(input: $input) { commit { oid url } } }",
-              variables: {
-                input: {
-                  branch: {
-                    repositoryNameWithOwner: ENV.fetch("REPOSITORY"),
-                    branchName: ENV.fetch("AUTOMATION_BRANCH")
-                  },
-                  message: { headline: ENV.fetch("TITLE"), body: ENV.fetch("COMMIT_BODY") },
-                  fileChanges: { additions: additions },
-                  expectedHeadOid: ENV.fetch("BASE_SHA")
-                }
-              }
-            }
-            File.write(ENV.fetch("PAYLOAD_FILE"), JSON.generate(payload))
-          '
-          commit_url="$(gh api graphql --input "${payload_file}" --jq '.data.createCommitOnBranch.commit.url')"
-          compare_url="$(ruby -ruri -e '
-            base = [
-              ENV.fetch("GITHUB_SERVER_URL"),
-              ENV.fetch("REPOSITORY"),
-              "compare/main...#{ENV.fetch("AUTOMATION_BRANCH")}"
-            ].join("/")
-            body = format(
-              "Refresh the committed crates.io top-1,000 seed from dump %<dump>s " \
-              "(source commit %<source>s).\n\n" \
-              "The protected crates.io data refresh is dispatched only after this PR is reviewed and merged.",
-              dump: ENV.fetch("DUMP_TAKEN_AT"),
-              source: ENV.fetch("SOURCE_COMMIT")
-            )
-            print "#{base}?#{URI.encode_www_form(expand: 1, title: "chore(data): refresh crates.io seed", body: body)}"
-          ')"
-
-          {
-            echo "### Automation branch updated"
-            echo
-            echo "- Commit: [${title}](${commit_url})"
-            echo "- Next: [open the reviewed seed pull request](${compare_url})"
-            echo
-            echo "Opening the pull request is intentionally a human action so normal required CI runs without adding bot credentials."
-          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Upload seed candidate
+        if: steps.seed.outputs.update_required == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: cratesio-seed-candidate
+          path: ${{ runner.temp }}/cratesio-seed-candidate.tgz
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Record final disk space
         id: disk-after
@@ -298,10 +230,157 @@ jobs:
             echo "| Runner disk consumed (bytes) | ${disk_used_bytes} |"
           } >> "${GITHUB_STEP_SUMMARY}"
 
+  propose:
+    name: Propose seed pull request
+    needs: update
+    if: needs.update.outputs.update_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment:
+      name: starhaven
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.update.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Download seed candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: cratesio-seed-candidate
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify seed candidate
+        run: |
+          candidate="${RUNNER_TEMP}/candidate-seed"
+          tgz="${RUNNER_TEMP}/artifact/cratesio-seed-candidate.tgz"
+          mkdir -p "${candidate}"
+
+          entries="$(tar --list --gzip --file="${tgz}")"
+          expected=$'manifest.json\ntop_1000.tsv\ntracked_versions.tsv.gz'
+          if [[ "$(sort <<< "${entries}")" != "$(sort <<< "${expected}")" ]]; then
+            echo "::error::seed candidate artifact contained unexpected entries"
+            exit 1
+          fi
+          tar --extract --gzip --file="${tgz}" --directory="${candidate}"
+
+          # Re-run the freshness and comparison gate against the committed seed
+          # so this job never publishes an artifact the gate did not approve.
+          result="$(bundle exec ruby research/check_cratesio_seed_update.rb seed/cratesio "${candidate}")"
+          jq -er '.update_required == true' <<< "${result}" >/dev/null
+          echo "CANDIDATE_SEED=${candidate}" >> "${GITHUB_ENV}"
+
+      - name: Mint bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Update automation branch and pull request
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          AUTOMATION_BRANCH: automation/cratesio-seed
+          BASE_SHA: ${{ needs.update.outputs.base_sha }}
+          DUMP_TAKEN_AT: ${{ needs.update.outputs.dump_taken_at }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_COMMIT: ${{ needs.update.outputs.source_commit }}
+        run: |
+          title="chore(data): refresh crates.io seed"
+          bot_user="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/${bot_user}" --jq .id)"
+          commit_body="Signed-off-by: ${bot_user} <${bot_id}+${bot_user}@users.noreply.github.com>"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${AUTOMATION_BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${AUTOMATION_BRANCH}" \
+              --method PATCH \
+              --field "sha=${BASE_SHA}" \
+              --field force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              --method POST \
+              --field "ref=refs/heads/${AUTOMATION_BRANCH}" \
+              --field "sha=${BASE_SHA}"
+          fi
+
+          # The encoded version seed is far larger than the kernel's per-argument
+          # limit, so the mutation payload must reach gh through a file, never
+          # through argv or the environment.
+          payload_file="${RUNNER_TEMP}/create-seed-commit.json"
+          # shellcheck disable=SC2016 # $input is a GraphQL variable, not shell
+          TITLE="${title}" COMMIT_BODY="${commit_body}" \
+            PAYLOAD_FILE="${payload_file}" ruby -rjson -e '
+            seed = ENV.fetch("CANDIDATE_SEED")
+            names = %w[manifest.json top_1000.tsv tracked_versions.tsv.gz]
+            additions = names.map do |name|
+              {
+                path: "seed/cratesio/#{name}",
+                contents: [File.binread(File.join(seed, name))].pack("m0")
+              }
+            end
+            payload = {
+              query: "mutation($input: CreateCommitOnBranchInput!) " \
+                     "{ createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {
+                input: {
+                  branch: {
+                    repositoryNameWithOwner: ENV.fetch("REPOSITORY"),
+                    branchName: ENV.fetch("AUTOMATION_BRANCH")
+                  },
+                  message: { headline: ENV.fetch("TITLE"), body: ENV.fetch("COMMIT_BODY") },
+                  fileChanges: { additions: additions },
+                  expectedHeadOid: ENV.fetch("BASE_SHA")
+                }
+              }
+            }
+            File.write(ENV.fetch("PAYLOAD_FILE"), JSON.generate(payload))
+          '
+          commit_url="$(gh api graphql --input "${payload_file}" --jq '.data.createCommitOnBranch.commit.url')"
+
+          body_file="${RUNNER_TEMP}/seed-pr-body.md"
+          {
+            printf 'Refresh the committed crates.io top-1,000 seed from dump %s (source commit %s).\n\n' \
+              "${DUMP_TAKEN_AT}" "${SOURCE_COMMIT}"
+            printf 'Merging this pull request authorizes the protected crates.io data refresh; '
+            printf 'the Refresh crates.io after seed merge workflow dispatches it automatically.\n\n'
+            printf 'Auto-generated by the [seed update workflow](%s).\n' "${RUN_URL}"
+          } > "${body_file}"
+
+          existing="$(gh pr list --repo "${REPOSITORY}" --head "${AUTOMATION_BRANCH}" --base main \
+            --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "${existing}" ]]; then
+            pr_url="$(gh pr create --repo "${REPOSITORY}" --base main --head "${AUTOMATION_BRANCH}" \
+              --title "${title}" --body-file "${body_file}")"
+          else
+            gh pr edit "${existing}" --repo "${REPOSITORY}" --title "${title}" --body-file "${body_file}"
+            pr_url="${GITHUB_SERVER_URL}/${REPOSITORY}/pull/${existing}"
+          fi
+
+          {
+            echo "### Seed pull request ready"
+            echo
+            echo "- Commit: [${title}](${commit_url})"
+            echo "- Pull request: ${pr_url}"
+            echo
+            echo "A reviewed human merge remains the production gate; the post-merge listener dispatches the protected refresh."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
   seed-issue:
     name: Open/close seed update issue
-    needs: update
-    if: ${{ always() && (needs.update.result == 'success' || needs.update.result == 'failure') }}
+    needs: [update, propose]
+    if: ${{ always() && (needs.update.result == 'success' || needs.update.result == 'failure' || needs.propose.result == 'failure') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     continue-on-error: true # issue bookkeeping must not override the seed update result
@@ -313,9 +392,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           ISSUE_TITLE: Update crates.io seed workflow failing
+          PROPOSE_RESULT: ${{ needs.propose.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           UPDATE_RESULT: ${{ needs.update.result }}
         run: |
+          if [ "${UPDATE_RESULT}" = "failure" ] || [ "${PROPOSE_RESULT}" = "failure" ]; then
+            overall="failure"
+          elif [ "${UPDATE_RESULT}" = "success" ] && { [ "${PROPOSE_RESULT}" = "success" ] || [ "${PROPOSE_RESULT}" = "skipped" ]; }; then
+            overall="success"
+          else
+            exit 0
+          fi
+
           retry_gh() {
             local attempt output
             for attempt in 1 2 3; do
@@ -342,7 +430,7 @@ jobs:
 
           bookkeeping_status=0
 
-          if [ "${UPDATE_RESULT}" = "success" ]; then
+          if [ "${overall}" = "success" ]; then
             while IFS= read -r number; do
               [ -n "${number}" ] || continue
               if ! retry_gh issue close "${number}" --reason completed \
@@ -351,7 +439,7 @@ jobs:
                 bookkeeping_status=1
               fi
             done <<< "${numbers}"
-          elif [ "${UPDATE_RESULT}" = "failure" ]; then
+          else
             number="${numbers%%$'\n'*}"
             if [ -n "${number}" ]; then
               if ! retry_gh issue comment "${number}" --body "Seed update run failed: ${RUN_URL}" </dev/null; then

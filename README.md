@@ -14,8 +14,8 @@ most-downloaded packages have adopted it, and how that changes over time.
 RubyGems.org is the first production registry. The schema and ingestion
 pipeline are registry-agnostic: crates.io carries its tracked set in
 `seed/cratesio/`, reads provenance from the API, has completed its initial
-production backfill, and is exposed by the web tier. Automating crates.io seed
-regeneration remains to do, and PyPI reads provenance while its tracked set
+production backfill, and is exposed by the web tier. A weekly workflow
+proposes its seed refresh as a reviewed pull request, and PyPI reads provenance while its tracked set
 and discovery cursor remain the next implementation phase. The ingestion
 engine is built with [Hanami 3.0](https://hanakai.org/hanami).
 
@@ -120,12 +120,14 @@ manifest alone do not create churn.
 Failures open or update a repository issue, which the next successful seed
 update closes.
 
-When tracked content changes, the workflow force-updates the fixed
-`automation/cratesio-seed` branch with a signed-off GitHub commit and writes a
-compare link to its summary. A human opens the PR so normal required CI runs;
-the workflow has no permission to create or approve one. After that narrowly
-scoped PR is reviewed and merged, `Refresh crates.io after seed merge` verifies
-its branch, repository, and complete file list before dispatching the existing
+When tracked content changes, a separate proposal job re-verifies the
+generated seed against the committed one, then updates the fixed
+`automation/cratesio-seed` branch and opens or refreshes the seed pull request
+as the org's bot app; the workflow's own token still cannot create or approve
+pull requests. Bot-opened PRs run the normal required CI, and a reviewed human
+merge remains the production gate. After that narrowly scoped PR merges,
+`Refresh crates.io after seed merge` verifies its branch, repository, and
+complete file list before dispatching the existing
 protected `Refresh Data` workflow with `registry=cratesio` and
 `refresh_limit=1000`. No crates.io seed path is added to the push-triggered dry
 run, and Cloudflare credentials remain confined to `Refresh Data`.
