@@ -100,27 +100,35 @@ replace production D1 or change production refresh-issue state; publication is
 limited to scheduled and explicitly dispatched runs.
 
 The same workflow is the crates.io refresh entry point. The initial production
-backfill completed against the 2026-08-21 dump. After committing a regenerated
-crates.io seed, dispatch with `registry=cratesio` and `refresh_limit=1000`, then
-repeat until the job summary reports zero tracked versions unchecked. Each run
-restores the prior D1 state, re-seeds idempotently from the committed crates.io
-dump, settles releases from before trusted publishing existed without API
-calls, and persists the next bounded batch. It records a crates.io snapshot
-only after the refresh is complete, so a partial observation is not presented
-as an adoption point. The snapshot is dated to the committed dump rather than
-the dispatch, so rerunning an unchanged seed replaces that observation instead
-of adding a flat point on an arbitrary day.
+backfill completed against the 2026-08-21 dump. Each run restores the prior D1
+state, re-seeds idempotently from the committed crates.io dump, settles releases
+from before trusted publishing existed without API calls, and persists the next
+bounded batch. It records a crates.io snapshot only after the refresh is
+complete, so a partial observation is not presented as an adoption point. The
+snapshot is dated to the committed dump rather than the dispatch, so rerunning
+an unchanged seed replaces that observation instead of adding a flat point on
+an arbitrary day.
 Refresh retries share a 30-minute wall-clock budget, and the engine reports the
 authoritative remaining backlog from the same scope it uses to select work.
 
-The manually dispatched `Measure crates.io seed refresh` workflow is the
-production-isolated precursor to scheduling that seed regeneration. It streams
-the current daily dump into runner-temporary storage, extracts it, rebuilds the
-top-1,000 seed, and reports phase timings, archive and seed sizes, builder peak
-memory, and disk consumption. It has no Cloudflare environment or secrets and
-does not upload artifacts, change the committed seed, or write production data.
-Those measurements determine whether the eventual scheduled refresh can safely
-run as one job or should pass the compact generated seed to a second job.
+At 05:00 UTC each Monday, `Update crates.io seed` streams the current daily dump
+into runner-temporary storage, extracts it, and rebuilds the top-1,000 seed. It
+rejects a dump that is not newer than the committed manifest, is more than two
+days old, or is implausibly future-dated. Package data is compared directly and
+the version seed by decompressed content, so gzip platform metadata and a newer
+manifest alone do not create churn.
+Failures open or update a repository issue, which the next successful seed
+update closes.
+
+When tracked content changes, the workflow force-updates the fixed
+`automation/cratesio-seed` branch with a signed-off GitHub commit and writes a
+compare link to its summary. A human opens the PR so normal required CI runs;
+the workflow has no permission to create or approve one. After that narrowly
+scoped PR is reviewed and merged, `Refresh crates.io after seed merge` verifies
+its branch, repository, and complete file list before dispatching the existing
+protected `Refresh Data` workflow with `registry=cratesio` and
+`refresh_limit=1000`. No crates.io seed path is added to the push-triggered dry
+run, and Cloudflare credentials remain confined to `Refresh Data`.
 
 Schema changes that site queries depend on must land before the corresponding
 site change: merge the schema, dispatch `Refresh Data`, then merge the site
@@ -147,8 +155,8 @@ responses (see `research/`).
   the ingest/snapshot operations
 - `seed/rubygems/`: compact tracked-set data derived from the 2026-08-10
   weekly dump (see `manifest.json`)
-- `seed/cratesio/`: compact tracked-set data derived from the 2026-08-21
-  daily dump; its versions remain unchecked until the provenance backfill
+- `seed/cratesio/`: compact tracked-set data derived from the current committed
+  daily dump; newly added versions remain unchecked until the provenance refresh
 - `research/`: the dump-processing scripts and recorded registry samples
 
 <!-- fleet:block license-section -->

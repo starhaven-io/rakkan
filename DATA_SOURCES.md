@@ -161,12 +161,13 @@ is not on the primary path.
   retry policy without buffering the dump in memory. The client follows the
   official endpoint's allowlisted HTTPS redirect to crates.io's CDN.
   `research/build_cratesio_seed.rb` then performs the ranking and version
-  distillation, and `seed/cratesio/` holds its output: the top 1,000 crates and
-  their 41,285 versions, distilled from the 2026-08-21 dump. Rebuilding from
+  distillation, and `seed/cratesio/` holds its top-1,000 output. Rebuilding from
   the same dump on the same toolchain reproduces those files byte for byte;
   across toolchains the guarantee is the decompressed content, since the gzip
-  container records a platform code. The dump is daily, so re-seeding is also
-  this registry's discovery path and no live feed walk is needed.
+  container records a platform code. A Monday workflow compares that semantic
+  content with the committed seed and updates an automation branch only when it
+  changes. The dump is daily, so this reviewed weekly re-seeding is also the
+  registry's discovery path and no live feed walk is needed.
 - A top-1,000 backfill is bounded by publish date rather than by crawling
   every version. `trustpub_data` arrived in the
   `2025-07-04-102806_add_trustpub_data_columns` migration and records how a
