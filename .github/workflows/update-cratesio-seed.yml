@@ -1,0 +1,367 @@
+name: Update crates.io seed
+
+on:
+  workflow_dispatch:
+  schedule:
+    # The daily dump normally lands around 02:00 UTC; keep observations on Mondays.
+    - cron: "0 05 * * 1"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: update-cratesio-seed
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Generate seed update
+    if: github.repository_owner == 'starhaven-io' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write # required only to update the automation-owned branch
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Verify runner tools
+        run: |
+          if [[ ! -x /usr/bin/time ]]; then
+            echo "::error::/usr/bin/time is not available on this runner"
+            exit 1
+          fi
+          for tool in gh gzip jq tar; do
+            if ! command -v "${tool}" >/dev/null; then
+              echo "::error::${tool} is not available on this runner"
+              exit 1
+            fi
+          done
+
+      - name: Set update paths
+        run: |
+          {
+            echo "ARCHIVE=${RUNNER_TEMP}/cratesio-db-dump.tar.gz"
+            echo "BUILD_METRICS=${RUNNER_TEMP}/cratesio-build-resources.txt"
+            echo "DUMP_DIR=${RUNNER_TEMP}/cratesio-dump"
+            echo "GENERATED_SEED=${RUNNER_TEMP}/cratesio-seed"
+          } >> "${GITHUB_ENV}"
+
+      - name: Record initial disk space
+        id: disk-before
+        run: |
+          df --human-readable "${RUNNER_TEMP}"
+          available="$(df --output=avail -B1 "${RUNNER_TEMP}" | tail -n 1 | tr -d ' ')"
+          echo "bytes=${available}" >> "${GITHUB_OUTPUT}"
+          {
+            echo "## crates.io seed update"
+            echo
+            echo "Phase results are recorded as they complete."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Download daily dump
+        id: download
+        run: |
+          started="${SECONDS}"
+          result="$(bundle exec ruby research/download_cratesio_dump.rb "${ARCHIVE}")"
+          elapsed=$(( SECONDS - started ))
+          bytes="$(jq -er '.bytes | select(type == "number" and . > 0)' <<< "${result}")"
+          test "$(stat --format=%s "${ARCHIVE}")" -eq "${bytes}"
+          {
+            echo "seconds=${elapsed}"
+            echo "bytes=${bytes}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Download complete"
+            echo
+            echo "- Elapsed: ${elapsed}s"
+            echo "- Archive: ${bytes} bytes"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Extract daily dump
+        id: extract
+        run: |
+          mkdir -p "${DUMP_DIR}"
+          started="${SECONDS}"
+          tar --extract --gzip --file="${ARCHIVE}" --directory="${DUMP_DIR}" --strip-components=1
+          elapsed=$(( SECONDS - started ))
+
+          test -f "${DUMP_DIR}/metadata.json"
+          for table in crate_downloads crates default_versions versions; do
+            test -f "${DUMP_DIR}/data/${table}.csv"
+          done
+
+          dump_taken_at="$(jq -er '.timestamp | select(type == "string" and test("^[0-9TZ:.+-]+$"))' \
+            "${DUMP_DIR}/metadata.json")"
+          source_commit="$(jq -er '.crates_io_commit | select(type == "string" and test("^[0-9a-f]{40}$"))' \
+            "${DUMP_DIR}/metadata.json")"
+          {
+            echo "seconds=${elapsed}"
+            echo "dump_taken_at=${dump_taken_at}"
+            echo "source_commit=${source_commit}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Extraction complete"
+            echo
+            echo "- Elapsed: ${elapsed}s"
+            echo "- Dump timestamp: \`${dump_taken_at}\`"
+            echo "- crates.io source commit: \`${source_commit}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Build seed
+        id: build
+        run: |
+          started="${SECONDS}"
+          /usr/bin/time --verbose --output="${BUILD_METRICS}" \
+            bundle exec ruby research/build_cratesio_seed.rb "${DUMP_DIR}" "${GENERATED_SEED}"
+          elapsed=$(( SECONDS - started ))
+
+          seed_bytes="$(du --bytes --summarize "${GENERATED_SEED}" | cut -f1)"
+          peak_rss_kib="$(awk -F: '/Maximum resident set size/ { gsub(/^[[:space:]]+/, "", $2); print $2 }' \
+            "${BUILD_METRICS}")"
+          test "${seed_bytes}" -gt 0
+          test "${peak_rss_kib}" -gt 0
+
+          {
+            echo "seconds=${elapsed}"
+            echo "seed_bytes=${seed_bytes}"
+            echo "peak_rss_kib=${peak_rss_kib}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Seed build complete"
+            echo
+            echo "- Elapsed: ${elapsed}s"
+            echo "- Generated seed: ${seed_bytes} bytes"
+            echo "- Builder peak RSS: ${peak_rss_kib} KiB"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Evaluate seed update
+        id: seed
+        run: |
+          result="$(bundle exec ruby research/check_cratesio_seed_update.rb seed/cratesio "${GENERATED_SEED}")"
+          update_required="$(jq -er '.update_required | if . then "true" else "false" end' <<< "${result}")"
+          dump_taken_at="$(jq -er '.dump_taken_at | select(type == "string")' <<< "${result}")"
+          source_commit="$(jq -er '.source_commit | select(type == "string")' <<< "${result}")"
+          packages="$(jq -er '.packages | select(type == "number" and . == 1000)' <<< "${result}")"
+          versions="$(jq -er '.versions | select(type == "number" and . > 0)' <<< "${result}")"
+          {
+            echo "update_required=${update_required}"
+            echo "dump_taken_at=${dump_taken_at}"
+            echo "source_commit=${source_commit}"
+            echo "packages=${packages}"
+            echo "versions=${versions}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "### Seed comparison complete"
+            echo
+            echo "- Content changed: ${update_required}"
+            echo "- Tracked packages: ${packages}"
+            echo "- Tracked versions: ${versions}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Update automation branch
+        if: steps.seed.outputs.update_required == 'true'
+        env:
+          AUTOMATION_BRANCH: automation/cratesio-seed
+          DUMP_TAKEN_AT: ${{ steps.seed.outputs.dump_taken_at }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_COMMIT: ${{ steps.seed.outputs.source_commit }}
+        run: |
+          title="chore(data): refresh crates.io seed"
+          bot_user="github-actions[bot]"
+          bot_id="$(gh api "/users/${bot_user}" --jq .id)"
+          bot_email="${bot_id}+${bot_user}@users.noreply.github.com"
+          base_sha="${GITHUB_SHA}"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${AUTOMATION_BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${AUTOMATION_BRANCH}" \
+              --method PATCH \
+              --field "sha=${base_sha}" \
+              --field force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" \
+              --method POST \
+              --field "ref=refs/heads/${AUTOMATION_BRANCH}" \
+              --field "sha=${base_sha}"
+          fi
+
+          additions="$(ruby -rjson -e '
+            seed = ENV.fetch("GENERATED_SEED")
+            names = %w[manifest.json top_1000.tsv tracked_versions.tsv.gz]
+            additions = names.map do |name|
+              {
+                path: "seed/cratesio/#{name}",
+                contents: [File.binread(File.join(seed, name))].pack("m0")
+              }
+            end
+            print JSON.generate(additions)
+          ')"
+          commit_body="Signed-off-by: ${bot_user} <${bot_email}>"
+
+          payload="$(jq -n \
+            --arg repo "${REPOSITORY}" \
+            --arg branch "${AUTOMATION_BRANCH}" \
+            --arg title "${title}" \
+            --arg body "${commit_body}" \
+            --arg head "${base_sha}" \
+            --argjson additions "${additions}" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: {
+                input: {
+                  branch: { repositoryNameWithOwner: $repo, branchName: $branch },
+                  message: { headline: $title, body: $body },
+                  fileChanges: { additions: $additions },
+                  expectedHeadOid: $head
+                }
+              }
+            }')"
+          commit_url="$(gh api graphql --input - --jq '.data.createCommitOnBranch.commit.url' <<< "${payload}")"
+          compare_url="$(ruby -ruri -e '
+            base = [
+              ENV.fetch("GITHUB_SERVER_URL"),
+              ENV.fetch("REPOSITORY"),
+              "compare/main...#{ENV.fetch("AUTOMATION_BRANCH")}"
+            ].join("/")
+            body = format(
+              "Refresh the committed crates.io top-1,000 seed from dump %<dump>s " \
+              "(source commit %<source>s).\n\n" \
+              "The protected crates.io data refresh is dispatched only after this PR is reviewed and merged.",
+              dump: ENV.fetch("DUMP_TAKEN_AT"),
+              source: ENV.fetch("SOURCE_COMMIT")
+            )
+            print "#{base}?#{URI.encode_www_form(expand: 1, title: "chore(data): refresh crates.io seed", body: body)}"
+          ')"
+
+          {
+            echo "### Automation branch updated"
+            echo
+            echo "- Commit: [${title}](${commit_url})"
+            echo "- Next: [open the reviewed seed pull request](${compare_url})"
+            echo
+            echo "Opening the pull request is intentionally a human action so normal required CI runs without adding bot credentials."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Record final disk space
+        id: disk-after
+        run: |
+          df --human-readable "${RUNNER_TEMP}"
+          available="$(df --output=avail -B1 "${RUNNER_TEMP}" | tail -n 1 | tr -d ' ')"
+          echo "bytes=${available}" >> "${GITHUB_OUTPUT}"
+
+      - name: Report measurements
+        env:
+          ARCHIVE_BYTES: ${{ steps.download.outputs.bytes }}
+          BUILD_SECONDS: ${{ steps.build.outputs.seconds }}
+          DISK_AFTER_BYTES: ${{ steps.disk-after.outputs.bytes }}
+          DISK_BEFORE_BYTES: ${{ steps.disk-before.outputs.bytes }}
+          DOWNLOAD_SECONDS: ${{ steps.download.outputs.seconds }}
+          EXTRACT_SECONDS: ${{ steps.extract.outputs.seconds }}
+          PACKAGES: ${{ steps.seed.outputs.packages }}
+          PEAK_RSS_KIB: ${{ steps.build.outputs.peak_rss_kib }}
+          SEED_BYTES: ${{ steps.build.outputs.seed_bytes }}
+          VERSIONS: ${{ steps.seed.outputs.versions }}
+        run: |
+          disk_used_bytes=$(( DISK_BEFORE_BYTES - DISK_AFTER_BYTES ))
+          total_seconds=$(( DOWNLOAD_SECONDS + EXTRACT_SECONDS + BUILD_SECONDS ))
+          {
+            echo "### Consolidated result"
+            echo
+            echo "| Phase | Seconds |"
+            echo "| --- | ---: |"
+            echo "| Download | ${DOWNLOAD_SECONDS} |"
+            echo "| Extract | ${EXTRACT_SECONDS} |"
+            echo "| Build seed | ${BUILD_SECONDS} |"
+            echo "| Total | ${total_seconds} |"
+            echo
+            echo "| Output | Value |"
+            echo "| --- | ---: |"
+            echo "| Archive bytes | ${ARCHIVE_BYTES} |"
+            echo "| Generated seed bytes | ${SEED_BYTES} |"
+            echo "| Tracked packages | ${PACKAGES} |"
+            echo "| Tracked versions | ${VERSIONS} |"
+            echo "| Builder peak RSS (KiB) | ${PEAK_RSS_KIB} |"
+            echo "| Runner disk consumed (bytes) | ${disk_used_bytes} |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  seed-issue:
+    name: Open/close seed update issue
+    needs: update
+    if: ${{ always() && (needs.update.result == 'success' || needs.update.result == 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true # issue bookkeeping must not override the seed update result
+    permissions:
+      issues: write # required to find, create, comment on, and close the failure issue
+    steps:
+      - name: Open, update, or close seed update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_TITLE: Update crates.io seed workflow failing
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          UPDATE_RESULT: ${{ needs.update.result }}
+        run: |
+          retry_gh() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(gh "$@")"; then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh $1 failed on attempt ${attempt}; retrying in 5 seconds" >&2
+                sleep 5
+              fi
+            done
+            return 1
+          }
+
+          if ! numbers="$(retry_gh api --paginate --method GET "repos/${GH_REPO}/issues" \
+              -f state=open \
+              -f 'creator=github-actions[bot]' \
+              -f per_page=100 \
+              --jq '.[] | select(.title == env.ISSUE_TITLE and (has("pull_request") | not)) | .number')"; then
+            echo "::warning::failed to list seed update failure issues"
+            exit 1
+          fi
+
+          bookkeeping_status=0
+
+          if [ "${UPDATE_RESULT}" = "success" ]; then
+            while IFS= read -r number; do
+              [ -n "${number}" ] || continue
+              if ! retry_gh issue close "${number}" --reason completed \
+                  --comment "Seed update run succeeded: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to close seed update issue #${number}"
+                bookkeeping_status=1
+              fi
+            done <<< "${numbers}"
+          elif [ "${UPDATE_RESULT}" = "failure" ]; then
+            number="${numbers%%$'\n'*}"
+            if [ -n "${number}" ]; then
+              if ! retry_gh issue comment "${number}" --body "Seed update run failed: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to comment on seed update issue #${number}"
+                bookkeeping_status=1
+              fi
+            else
+              issue_body="$(printf 'Seed update run failed: %s\n\nFiled automatically by update-cratesio-seed.yml; the next successful update closes this issue.\n' \
+                "${RUN_URL}")"
+              if ! retry_gh issue create --title "${ISSUE_TITLE}" --body "${issue_body}" </dev/null; then
+                echo "::warning::failed to create seed update failure issue"
+                bookkeeping_status=1
+              fi
+            fi
+          fi
+
+          exit "${bookkeeping_status}"

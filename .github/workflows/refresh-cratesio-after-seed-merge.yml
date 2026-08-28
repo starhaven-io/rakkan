@@ -1,0 +1,74 @@
+name: Refresh crates.io after seed merge
+
+# The updater's branch push intentionally triggers nothing; the human-opened PR is the CI boundary.
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: refresh-cratesio-after-seed-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch protected refresh
+    if: >-
+      github.repository_owner == 'starhaven-io' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/cratesio-seed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write # required to dispatch Refresh Data
+      contents: read
+      pull-requests: read # required to verify the merged PR's complete file list
+    steps:
+      - name: Verify merged seed update and dispatch refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          files_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files")"
+          if ! jq -e '
+            [.[][] | {filename, status}] as $files |
+            ($files | length) >= 2 and
+            ($files | length) <= 3 and
+            all($files[]; .status == "modified") and
+            all($files[].filename;
+              . == "seed/cratesio/manifest.json" or
+              . == "seed/cratesio/top_1000.tsv" or
+              . == "seed/cratesio/tracked_versions.tsv.gz") and
+            ($files | map(.filename) | index("seed/cratesio/manifest.json")) != null and
+            (
+              ($files | map(.filename) | index("seed/cratesio/top_1000.tsv")) != null or
+              ($files | map(.filename) | index("seed/cratesio/tracked_versions.tsv.gz")) != null
+            )
+          ' <<< "${files_json}" >/dev/null; then
+            echo "::error::merged automation PR contained an unexpected file set"
+            jq -r '.[][] | .filename' <<< "${files_json}"
+            exit 1
+          fi
+
+          gh workflow run refresh-data.yml \
+            --repo "${REPOSITORY}" \
+            --ref main \
+            --field registry=cratesio \
+            --field refresh_limit=1000
+
+          {
+            echo "## crates.io refresh dispatched"
+            echo
+            echo "Merged seed update: [#${PR_NUMBER}](${PR_URL})"
+            echo
+            echo "The protected Refresh Data workflow was dispatched with \`registry=cratesio\` and \`refresh_limit=1000\`."
+          } >> "${GITHUB_STEP_SUMMARY}"
