@@ -4,7 +4,7 @@ source "https://rubygems.org"
 
 # Headless data engine: the public web tier is site/ (Astro on Workers
 # reading the D1 export). No server, router, view, or mailer gems.
-gem "hanami", "~> 3.0.0"
+gem "hanami", "~> 3.0.2"
 gem "hanami-db", "~> 3.0.0"
 
 gem "dry-operation", ">= 1.0.1"
