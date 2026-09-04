@@ -74,7 +74,7 @@ jobs:
           restore-keys: ${{ runner.os }}-${{ runner.arch }}-typos-
 
       - name: Install typos-cli
-        run: cargo install typos-cli --locked --version 1.49.1
+        run: cargo install typos-cli --locked --version 1.50.0
 
       - name: Typos
         run: typos
