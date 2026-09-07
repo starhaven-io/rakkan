@@ -12,8 +12,8 @@ RSpec.describe CratesioSeedBuilder do
 
       first_seed = File.join(dump_dir, "seed-one")
       second_seed = File.join(dump_dir, "seed-two")
-      first = described_class.build(dump_dir:, seed_dir: first_seed, limit: 2)
-      second = described_class.build(dump_dir:, seed_dir: second_seed, limit: 2)
+      first = described_class.build(dump_dir:, seed_dir: first_seed, archive_sha256: "a" * 64, limit: 2)
+      second = described_class.build(dump_dir:, seed_dir: second_seed, archive_sha256: "a" * 64, limit: 2)
 
       expect(first).to eq(packages: 2, versions: 3)
       expect(second).to eq(first)
@@ -32,6 +32,7 @@ RSpec.describe CratesioSeedBuilder do
       manifest = JSON.parse(File.read(File.join(first_seed, "manifest.json")))
       expect(manifest).to include(
         "dump_taken_at" => "2026-08-20T02:00:21.810126238Z",
+        "archive_sha256" => "a" * 64,
         "source_commit" => "42df592c355587e792e7424563b336c7f01344d0",
         "provenance" => "not present in the database dump; seeded versions remain unchecked"
       )
@@ -45,6 +46,38 @@ RSpec.describe CratesioSeedBuilder do
           "30\t3.0.0\t3\t2026-08-20 01:00:00\tfalse\ttrue\ttrue"
         ]
       )
+    end
+  end
+
+  it "rejects ambiguous download totals and unknown boolean values" do
+    Dir.mktmpdir("rakkan-cratesio-dump") do |dump_dir|
+      data_dir = File.join(dump_dir, "data")
+      FileUtils.mkdir_p(data_dir)
+      write_dump_fixture(dump_dir, data_dir)
+      File.open(File.join(data_dir, "crate_downloads.csv"), "a") { |file| file.puts "1,30" }
+
+      expect do
+        described_class.build(
+          dump_dir:, seed_dir: File.join(dump_dir, "duplicate"), archive_sha256: "a" * 64, limit: 2
+        )
+      end
+        .to raise_error(ArgumentError, /duplicate download total/)
+
+      write_dump_fixture(dump_dir, data_dir)
+      versions = File.join(data_dir, "versions.csv")
+      File.write(
+        versions,
+        File.read(versions).sub(
+          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00,f\n",
+          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00,unknown\n"
+        )
+      )
+      expect do
+        described_class.build(
+          dump_dir:, seed_dir: File.join(dump_dir, "boolean"), archive_sha256: "a" * 64, limit: 2
+        )
+      end
+        .to raise_error(ArgumentError, /yanked must be a recognized boolean/)
     end
   end
 

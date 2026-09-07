@@ -1,49 +1,110 @@
 # frozen_string_literal: true
 
-# Second streaming pass over the dump: keep only the versions rows
-# belonging to the tracked gem set, and only the columns the tracker needs.
-# COPY escapes tabs/newlines inside values, so splitting raw lines on "\t"
-# is safe.
-#
-# Usage: ruby research/filter_versions.rb <PostgreSQL.sql.gz> <top.tsv> <out.tsv>
+require "csv"
+require "fileutils"
+require "tempfile"
+require "zlib"
 
-sql_gz, top_tsv, out = ARGV
+module RubygemsVersionFilter
+  module_function
 
-tracked = {}
-File.foreach(top_tsv).drop(1).each { |l| tracked[l.split("\t")[1]] = true }
+  REQUIRED_COLUMNS = %w[
+    id number rubygem_id platform created_at indexed prerelease latest
+    yanked_at pusher_id pusher_api_key_id
+  ].freeze
+  COPY_HEADER = /\ACOPY public\.versions \(([^)]+)\) FROM stdin;\s*\z/
 
-# versions columns (from the dump's COPY header):
-# 0 id, 1 authors, 2 description, 3 number, 4 rubygem_id, 5 built_at,
-# 6 updated_at, 7 summary, 8 platform, 9 created_at, 10 indexed,
-# 11 prerelease, 12 position, 13 latest, 14 full_name, 15 licenses, 16 size,
-# 17 requirements, 18 required_ruby_version, 19 sha256, 20 metadata,
-# 21 required_rubygems_version, 22 yanked_at, 23 pusher_id,
-# 24 canonical_number, 25 cert_chain, 26 pusher_api_key_id, 27 gem_platform,
-# 28 gem_full_name, 29 spec_sha256, 30 info_checksum_v2, 31 yanked_info_checksum_v2
-KEEP = [0, 3, 4, 8, 9, 10, 11, 13, 22, 23, 26].freeze
-HEADER = %w[id number rubygem_id platform created_at indexed prerelease latest
-            yanked_at pusher_id pusher_api_key_id].join("\t")
+  def filter(sql_gz:, tracked_packages_path:, output_path:)
+    tracked = tracked_package_ids(tracked_packages_path)
+    found = false
+    complete = false
+    columns = nil
+    indexes = nil
+    total = 0
+    kept = 0
+    version_ids = {}
+    package_ids_with_versions = {}
 
-in_versions = false
-kept = 0
-total = 0
-File.open(out, "w") do |f|
-  f.puts HEADER
-  IO.popen(["gzcat", sql_gz]) do |io|
-    io.each_line do |line|
-      if in_versions
-        break if line.start_with?("\\.")
+    FileUtils.mkdir_p(File.dirname(File.expand_path(output_path)))
+    Tempfile.create([".#{File.basename(output_path)}-", ".tmp"],
+                    File.dirname(File.expand_path(output_path))) do |output|
+      output.set_encoding("UTF-8")
+      output.puts REQUIRED_COLUMNS.join("\t")
+      Zlib::GzipReader.open(sql_gz, external_encoding: "UTF-8") do |gzip|
+        gzip.each_line do |line|
+          unless found
+            match = COPY_HEADER.match(line)
+            next unless match
 
-        total += 1
-        fields = line.chomp.split("\t", -1)
-        next unless tracked[fields[4]]
+            columns = match[1].split(", ").map { |column| column.delete_prefix('"').delete_suffix('"') }
+            missing = REQUIRED_COLUMNS - columns
+            raise ArgumentError, "versions COPY is missing columns: #{missing.join(", ")}" unless missing.empty?
 
-        f.puts fields.values_at(*KEEP).join("\t")
-        kept += 1
-      elsif line.start_with?("COPY public.versions ")
-        in_versions = true
+            indexes = REQUIRED_COLUMNS.map { |column| columns.index(column) }
+            found = true
+            next
+          end
+
+          if line.chomp == "\\."
+            complete = true
+            break
+          end
+
+          fields = line.chomp.split("\t", -1)
+          unless fields.length == columns.length
+            raise ArgumentError,
+                  "versions row width does not match its COPY schema"
+          end
+
+          total += 1
+          package_id = fields.fetch(columns.index("rubygem_id"))
+          next unless tracked.key?(package_id)
+
+          selected = indexes.map { |index| fields.fetch(index) }
+          version_id = selected.first
+          raise ArgumentError, "duplicate version id #{version_id}" if version_ids[version_id]
+
+          version_ids[version_id] = true
+          package_ids_with_versions[package_id] = true
+          output.puts selected.join("\t")
+          kept += 1
+        end
       end
+
+      raise ArgumentError, "versions COPY block was not found" unless found
+      raise ArgumentError, "versions COPY block was not terminated" unless complete
+
+      missing_packages = tracked.keys - package_ids_with_versions.keys
+      unless missing_packages.empty?
+        raise ArgumentError, "#{missing_packages.length} tracked packages have no version rows"
+      end
+
+      output.flush
+      output.fsync
+      File.rename(output.path, output_path)
+    end
+    { total:, kept: }
+  end
+
+  def tracked_package_ids(path)
+    rows = CSV.read(path, headers: true, col_sep: "\t", encoding: "UTF-8")
+    raise ArgumentError, "unexpected tracked-package header" unless rows.headers == %w[rank rubygem_id name downloads]
+
+    rows.each_with_object({}) do |row, ids|
+      id = row.fetch("rubygem_id")
+      raise ArgumentError, "duplicate tracked package id #{id}" if ids[id]
+
+      ids[id] = true
     end
   end
 end
-puts "versions total=#{total} kept=#{kept}"
+
+if $PROGRAM_NAME == __FILE__
+  sql_gz, tracked_packages_path, output_path = ARGV
+  unless sql_gz && tracked_packages_path && output_path
+    abort "usage: filter_versions.rb <PostgreSQL.sql.gz> <top.tsv> <out.tsv>"
+  end
+
+  result = RubygemsVersionFilter.filter(sql_gz:, tracked_packages_path:, output_path:)
+  puts "versions total=#{result.fetch(:total)} kept=#{result.fetch(:kept)}"
+end

@@ -58,6 +58,10 @@ export function searchResultSummary(
   return `${count} tracked ${packageNoun(registryName, count)} matched in ${registryDisplayName ?? 'the active registry'}.`;
 }
 
+export function normalizeSearchQuery(value: string | null | undefined): string {
+  return (value ?? '').trim().slice(0, 100);
+}
+
 /** Registry-neutral display name for each stored provenance kind. */
 export function provenanceLabel(kind: string | null): string {
   if (kind === 'sigstore_attestation') return 'Sigstore';
@@ -69,7 +73,16 @@ export function provenanceLabel(kind: string | null): string {
 /** "owner/repo" from a repository URL, for link text. */
 export function repositoryLabel(url: string): string {
   try {
-    return new URL(url).pathname.replace(/^\//, '').replace(/\.git$/, '');
+    const parsed = new URL(url);
+    return `${parsed.hostname}/${parsed.pathname.replace(/^\//, '').replace(/\.git$/, '')}`;
+  } catch {
+    return url;
+  }
+}
+
+export function urlHostname(url: string): string {
+  try {
+    return new URL(url).hostname;
   } catch {
     return url;
   }
@@ -81,7 +94,7 @@ export function safeHttpsUrl(value: string | null | undefined): string | null {
   try {
     const url = new URL(value);
     if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) return null;
-    return value;
+    return url.toString();
   } catch {
     return null;
   }

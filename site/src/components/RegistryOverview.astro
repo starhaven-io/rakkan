@@ -25,9 +25,14 @@ const singularPackage = packageNoun(registry?.name);
 const registryUrl = safeHttpsUrl(registry?.url);
 ---
 
-<Base registry={slug} title={slug === 'cratesio' && registry ? `${registry.display_name} · rakkan` : undefined}>
+<Base
+  registry={slug}
+  canonicalPath={site.overviewPath}
+  title={slug === 'cratesio' && registry ? `${registry.display_name} · rakkan` : undefined}
+  description={`Trusted publishing adoption among the most-downloaded ${packageWord} on ${registry?.display_name ?? 'the selected registry'}.`}
+>
   {
-    !registry || !snapshot ? (
+    !registry ? (
       <section class="empty-state">
         <h1>No data yet</h1>
         <p>The D1 database has not been loaded. Export from the ingestion side and load it locally:</p>
@@ -35,6 +40,15 @@ const registryUrl = safeHttpsUrl(registry?.url);
           <code>bundle exec rake export:d1</code>
           <code>cd site && npx wrangler d1 execute rakkan --local --file=../db/d1_export.sql</code>
         </div>
+      </section>
+    ) : !snapshot ? (
+      <section class="empty-state">
+        <h1>No complete snapshot yet</h1>
+        <p>
+          {registry.display_name} package data is loaded, but rakkan has not recorded an adoption point for an
+          incomplete provenance refresh.
+        </p>
+        <a href={site.packagesPath}>Browse the tracked packages →</a>
       </section>
     ) : (
       <>
@@ -86,7 +100,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
         <section class="panel">
           <header class="panel-header">
             <div>
-              <h3>Adoption over time</h3>
+              <h2>Adoption over time</h2>
               <p>{site.historyDescription}</p>
             </div>
             <span class="panel-meta">
@@ -95,6 +109,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
           </header>
           <div class="table-wrap">
             <table>
+              <caption class="visually-hidden">Historical publishing-provenance adoption snapshots</caption>
               <thead>
                 <tr>
                   <th>Date (UTC)</th>
@@ -133,12 +148,13 @@ const registryUrl = safeHttpsUrl(registry?.url);
           <section class="panel">
             <header class="panel-header">
               <div>
-                <h3>Recently adopted</h3>
+                <h2>Recently adopted</h2>
                 <p>Ordered by first release with provenance.</p>
               </div>
             </header>
             <div class="table-wrap">
               <table>
+                <caption class="visually-hidden">Packages most recently observed publishing with provenance</caption>
                 <thead>
                   <tr>
                     <th>Package</th>
@@ -166,7 +182,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
           <section class="panel">
             <header class="panel-header">
               <div>
-                <h3>Most downloaded</h3>
+                <h2>Most downloaded</h2>
                 <p>The head of the tracked set.</p>
               </div>
               <span class="panel-meta">
@@ -175,6 +191,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
             </header>
             <div class="table-wrap">
               <table>
+                <caption class="visually-hidden">Most-downloaded tracked packages and provenance status</caption>
                 <thead>
                   <tr>
                     <th>Package</th>

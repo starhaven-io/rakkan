@@ -2,6 +2,17 @@
 export const prerender = false;
 
 import RegistryPackages from '../../components/RegistryPackages.astro';
+import { getDb } from '../../lib/db.ts';
+import { registryByName, trackedPage, trackedSummary } from '../../lib/d1.ts';
+import { canonicalPageRedirect, parsePage } from '../../lib/pagination.ts';
+
+const db = getDb();
+const registry = await registryByName(db, 'cratesio');
+const requestedPage = parsePage(Astro.url.searchParams.get('page'));
+const packagePage = registry ? await trackedPage(db, registry.id, requestedPage) : null;
+const redirect = packagePage && canonicalPageRedirect('/cratesio/packages', requestedPage, packagePage.page);
+if (redirect) return Astro.redirect(redirect);
+const summary = registry ? await trackedSummary(db, registry.id) : { total: 0, provenant: 0 };
 ---
 
-<RegistryPackages slug="cratesio" />
+<RegistryPackages slug="cratesio" registry={registry} packagePage={packagePage} summary={summary} />

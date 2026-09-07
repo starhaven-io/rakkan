@@ -22,19 +22,20 @@ if [ ! -f .env ]; then
 fi
 
 announce "Preparing the databases..."
-bundle exec hanami db prepare
+HANAMI_LOG_LEVEL=info bundle exec hanami db prepare
 
-announce "Loading the tracked set from seed data (no network)..."
-bundle exec rake ingest:seed
-bundle exec rake snapshot:take
+announce "Loading the tracked sets from seed data (no network)..."
+HANAMI_LOG_LEVEL=info bundle exec rake ingest:seed
+HANAMI_LOG_LEVEL=info bundle exec rake "ingest:seed[cratesio]"
+HANAMI_LOG_LEVEL=info bundle exec rake snapshot:take
 
 announce "Installing site dependencies..."
 node scripts/check-npm-install-policy.mjs site
 (cd site && npm ci --strict-allow-scripts)
 
 announce "Exporting to the site's local D1..."
-bash scripts/normalize-rubygems-weekly-snapshots.sh db/rakkan.sqlite
-bundle exec rake export:d1
-(cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql)
+HANAMI_LOG_LEVEL=info bundle exec rake export:d1
+(cd site && WRANGLER_WRITE_LOGS=false ./node_modules/.bin/wrangler d1 execute \
+  rakkan --local --file=../db/d1_export.sql > /dev/null)
 
 announce "🌸 Setup complete. Start the site with: just dev"

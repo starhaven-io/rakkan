@@ -7,20 +7,22 @@ RSpec.describe CratesioSeedUpdate do
   let(:now) { Time.iso8601("2026-08-25T05:00:00Z") }
   let(:source_commit) { "42df592c355587e792e7424563b336c7f01344d0" }
 
-  it "ignores manifest and gzip-container churn when seed content is unchanged" do
+  it "publishes a newer exact-source manifest when seed content is unchanged" do
     with_seed_pair do |current_seed, candidate_seed|
-      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
-      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", source_commit: "a" * 40)
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z", version_created_at: "2026-08-17 00:00:00")
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", source_commit: "a" * 40,
+                                 version_created_at: "2026-08-17 00:00:00")
       rewrite_gzip_platform_byte(candidate_seed)
 
       result = described_class.check(current_seed:, candidate_seed:, now:)
 
       expect(result).to include(
-        update_required: false,
+        update_required: true,
+        content_changed: false,
         dump_taken_at: "2026-08-25T02:00:00Z",
         source_commit: "a" * 40,
         packages: 1_000,
-        versions: 2
+        versions: 1_000
       )
       expect(result.fetch(:packages_sha256)).to match(/\A[0-9a-f]{64}\z/)
       expect(result.fetch(:versions_sha256)).to match(/\A[0-9a-f]{64}\z/)
@@ -37,7 +39,7 @@ RSpec.describe CratesioSeedUpdate do
       )
 
       expect(described_class.check(current_seed:, candidate_seed:, now:))
-        .to include(update_required: true, versions: 2)
+        .to include(update_required: true, versions: 1_001)
     end
   end
 
@@ -51,13 +53,27 @@ RSpec.describe CratesioSeedUpdate do
     end
   end
 
-  it "rejects a candidate that is not newer than the committed seed" do
+  it "treats the exact current dump as a successful no-op" do
     with_seed_pair do |current_seed, candidate_seed|
       write_seed(current_seed, taken_at: "2026-08-25T02:00:00Z")
       write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z")
 
+      expect(described_class.check(current_seed:, candidate_seed:, now:))
+        .to include(update_required: false, content_changed: false)
+    end
+  end
+
+  it "rejects an older candidate or same-timestamp content substitution" do
+    with_seed_pair do |current_seed, candidate_seed|
+      write_seed(current_seed, taken_at: "2026-08-25T02:00:00Z")
+      write_seed(candidate_seed, taken_at: "2026-08-24T02:00:00Z")
+
       expect { described_class.check(current_seed:, candidate_seed:, now:) }
-        .to raise_error(ArgumentError, /not newer than the committed seed/)
+        .to raise_error(ArgumentError, /older than the committed seed/)
+
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", package_downloads: 2)
+      expect { described_class.check(current_seed:, candidate_seed:, now:) }
+        .to raise_error(ArgumentError, /reuses the committed timestamp with different data/)
     end
   end
 
@@ -81,6 +97,49 @@ RSpec.describe CratesioSeedUpdate do
     end
   end
 
+  it "validates a complete current seed within the weekly freshness window" do
+    Dir.mktmpdir("rakkan-cratesio-current-seed") do |seed|
+      write_seed(seed, taken_at: "2026-08-18T02:00:00Z")
+
+      expect(described_class.validate_current(seed_dir: seed, now: now))
+        .to eq(dump_taken_at: "2026-08-18T02:00:00Z")
+    end
+  end
+
+  it "rejects a committed seed older than the weekly freshness window" do
+    Dir.mktmpdir("rakkan-cratesio-current-seed") do |seed|
+      write_seed(seed, taken_at: "2026-08-16T01:59:59Z")
+
+      expect { described_class.validate_current(seed_dir: seed, now: now) }
+        .to raise_error(ArgumentError, /current dump is more than 9 days old/)
+    end
+  end
+
+  it "allows a stale but structurally valid current seed in ordinary CI mode" do
+    Dir.mktmpdir("rakkan-cratesio-structural-seed") do |seed|
+      write_seed(seed, taken_at: "2026-08-16T01:59:59Z")
+
+      expect(described_class.validate_current(seed_dir: seed, now: now, require_fresh: false))
+        .to eq(dump_taken_at: "2026-08-16T01:59:59Z")
+    end
+  end
+
+  it "rejects package rows that are not deterministically ranked" do
+    with_seed_pair do |current_seed, candidate_seed|
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z")
+      path = File.join(candidate_seed, "top_1000.tsv")
+      rows = File.readlines(path)
+      fields = rows.fetch(2).chomp.split("\t")
+      fields[2] = "aaa"
+      rows[2] = "#{fields.join("\t")}\n"
+      File.write(path, rows.join)
+
+      expect { described_class.check(current_seed:, candidate_seed:, now:) }
+        .to raise_error(ArgumentError, /not deterministically download-ranked/)
+    end
+  end
+
   it "rejects an incomplete tracked package set" do
     with_seed_pair do |current_seed, candidate_seed|
       write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
@@ -91,6 +150,16 @@ RSpec.describe CratesioSeedUpdate do
     end
   end
 
+  it "rejects a tracked package with no version rows" do
+    with_seed_pair do |current_seed, candidate_seed|
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", omit_version_for: 1_000)
+
+      expect { described_class.check(current_seed:, candidate_seed:, now:) }
+        .to raise_error(ArgumentError, /1 tracked packages have no versions/)
+    end
+  end
+
   it "rejects drift in the manifest contract" do
     with_seed_pair do |current_seed, candidate_seed|
       write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
@@ -98,6 +167,16 @@ RSpec.describe CratesioSeedUpdate do
 
       expect { described_class.check(current_seed:, candidate_seed:, now:) }
         .to raise_error(ArgumentError, /candidate seed has an unexpected source/)
+    end
+  end
+
+  it "rejects an invalid archive digest" do
+    with_seed_pair do |current_seed, candidate_seed|
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", archive_sha256: "not-a-digest")
+
+      expect { described_class.check(current_seed:, candidate_seed:, now:) }
+        .to raise_error(ArgumentError, /invalid archive SHA-256/)
     end
   end
 
@@ -113,10 +192,13 @@ RSpec.describe CratesioSeedUpdate do
   def write_seed(seed_dir, taken_at:, source_commit: self.source_commit,
                  source: "crates.io daily database dump", packages: 1_000,
                  package_downloads: 1,
-                 versions: ["1\t1.0.0", "2\t2.0.0"])
+                 archive_sha256: "a" * 64,
+                 version_created_at: nil,
+                 versions: ["1\t1.0.0"], omit_version_for: nil)
     manifest = {
       source: source,
       source_url: CratesioSeedBuilder::SOURCE_URL,
+      archive_sha256: archive_sha256,
       dump_taken_at: taken_at,
       source_commit: source_commit,
       built_by: "research/build_cratesio_seed.rb",
@@ -125,7 +207,7 @@ RSpec.describe CratesioSeedUpdate do
     }
     File.write(File.join(seed_dir, "manifest.json"), JSON.generate(manifest))
     package_rows = Array.new(packages) do |index|
-      "#{index + 1}\t#{index + 1}\tcrate-#{index + 1}\t#{package_downloads}\n"
+      "#{index + 1}\t#{index + 1}\tcrate-#{format("%04d", index + 1)}\t#{package_downloads}\n"
     end
     File.write(
       File.join(seed_dir, "top_1000.tsv"),
@@ -134,7 +216,16 @@ RSpec.describe CratesioSeedUpdate do
     Zlib::GzipWriter.open(File.join(seed_dir, "tracked_versions.tsv.gz")) do |gzip|
       gzip.mtime = 0
       gzip.write(CratesioSeedUpdate::VERSION_HEADER)
-      versions.each { |version| gzip.puts("#{version}\t1\t2026-08-20 00:00:00\tfalse\tfalse\tfalse") }
+      created_at = version_created_at || (Time.iso8601(taken_at) - 86_400).utc.strftime("%Y-%m-%d %H:%M:%S")
+      versions.each_with_index do |version, index|
+        latest = index == versions.length - 1
+        gzip.puts("#{version}\t1\t#{created_at}\tfalse\t#{latest}\tfalse")
+      end
+      2.upto(packages) do |package_id|
+        next if package_id == omit_version_for
+
+        gzip.puts("#{10_000 + package_id}\t1.0.0\t#{package_id}\t#{created_at}\tfalse\ttrue\tfalse")
+      end
     end
   end
 

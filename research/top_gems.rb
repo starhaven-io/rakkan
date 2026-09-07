@@ -1,50 +1,98 @@
 # frozen_string_literal: true
 
-# Compute the top-N gems by total downloads from the extracted
-# gem_downloads + rubygems dump tables. gem_downloads carries per-version rows
-# plus a version_id=0 row per gem holding the gem's total download count
-# (verified below before relying on it).
-#
-# Usage: ruby research/top_gems.rb <extracted-dir> <N> <out.tsv>
+require "fileutils"
+require "tempfile"
 
-dir, n, out = ARGV
-n = Integer(n)
+module RubygemsTopPackages
+  module_function
 
-# rubygems.tsv: id, name, created_at, updated_at, indexed, organization_id
-names = {}
-indexed = {}
-File.foreach(File.join(dir, "rubygems.tsv")) do |line|
-  f = line.chomp.split("\t")
-  names[f[0]] = f[1]
-  indexed[f[0]] = f[4]
-end
+  def build(extracted_dir:, limit:, output_path:)
+    limit = Integer(limit)
+    raise ArgumentError, "limit must be positive" unless limit.positive?
 
-# gem_downloads.tsv: id, rubygem_id, version_id, count
-totals = {}
-per_version_sum = Hash.new(0)
-File.foreach(File.join(dir, "gem_downloads.tsv")) do |line|
-  f = line.chomp.split("\t")
-  rubygem_id = f[1]
-  version_id = f[2]
-  count = f[3].to_i
-  if version_id == "0"
-    totals[rubygem_id] = count
-  else
-    per_version_sum[rubygem_id] += count
+    names = {}
+    indexed = {}
+    each_table_row(extracted_dir, "rubygems", %w[id name indexed]) do |row|
+      id = row.fetch("id")
+      name = row.fetch("name")
+      raise ArgumentError, "duplicate RubyGems package id #{id}" if names.key?(id)
+      raise ArgumentError, "package name must not be empty" if name.empty?
+
+      names[id] = name
+      indexed[id] = row.fetch("indexed")
+    end
+
+    totals = {}
+    per_version_sum = Hash.new(0)
+    each_table_row(extracted_dir, "gem_downloads", %w[rubygem_id version_id count]) do |row|
+      package_id = row.fetch("rubygem_id")
+      count = Integer(row.fetch("count"), 10)
+      raise ArgumentError, "download counts must be non-negative" if count.negative?
+
+      if row.fetch("version_id") == "0"
+        raise ArgumentError, "duplicate total download row for #{package_id}" if totals.key?(package_id)
+
+        totals[package_id] = count
+      else
+        per_version_sum[package_id] += count
+      end
+    end
+
+    rack_id = names.key("rack")
+    unless rack_id && totals[rack_id]&.positive? && per_version_sum[rack_id].positive? &&
+           totals.fetch(rack_id) >= per_version_sum.fetch(rack_id)
+      raise ArgumentError, "rack download totals do not match the expected dump semantics"
+    end
+
+    tracked = totals.filter_map do |id, downloads|
+      name = names[id]
+      [id, name, downloads] if id != "0" && name && indexed[id] == "t"
+    end
+    tracked.sort_by! { |id, name, downloads| [-downloads, name, id] }
+    tracked = tracked.first(limit)
+    unless tracked.length == limit
+      raise ArgumentError,
+            "dump contains only #{tracked.length} eligible packages; expected #{limit}"
+    end
+
+    write_atomic(output_path) do |file|
+      file.puts "rank\trubygem_id\tname\tdownloads"
+      tracked.each_with_index do |(id, name, downloads), index|
+        file.puts [index + 1, id, name, downloads].join("\t")
+      end
+    end
+    { packages: tracked.length }
+  end
+
+  def each_table_row(extracted_dir, table, required_columns)
+    columns = File.read(File.join(extracted_dir, "#{table}.columns"), encoding: "UTF-8").chomp.split("\t", -1)
+    missing = required_columns - columns
+    raise ArgumentError, "#{table} is missing columns: #{missing.join(", ")}" unless missing.empty?
+
+    File.foreach(File.join(extracted_dir, "#{table}.tsv"), encoding: "UTF-8") do |line|
+      fields = line.chomp.split("\t", -1)
+      raise ArgumentError, "#{table} row width does not match its COPY schema" unless fields.length == columns.length
+
+      yield columns.zip(fields).to_h
+    end
+  end
+
+  def write_atomic(path)
+    FileUtils.mkdir_p(File.dirname(File.expand_path(path)))
+    Tempfile.create([".#{File.basename(path)}-", ".tmp"], File.dirname(File.expand_path(path))) do |file|
+      file.set_encoding("UTF-8")
+      yield file
+      file.flush
+      file.fsync
+      File.rename(file.path, path)
+    end
   end
 end
 
-# Sanity check the version_id=0 semantics on a well-known gem before trusting it
-rack_id = names.key("rack")
-puts "sanity rack: total=#{totals[rack_id]} sum(per-version)=#{per_version_sum[rack_id]}"
+if $PROGRAM_NAME == __FILE__
+  extracted_dir, limit, output_path = ARGV
+  abort "usage: top_gems.rb <extracted-dir> <limit> <out.tsv>" unless extracted_dir && limit && output_path
 
-top = totals.reject { |id, _| id == "0" || names[id].nil? || indexed[id] != "t" }
-            .sort_by { |_, c| -c }
-            .first(n)
-
-File.open(out, "w") do |f|
-  f.puts "rank\trubygem_id\tname\tdownloads"
-  top.each_with_index { |(id, c), i| f.puts "#{i + 1}\t#{id}\t#{names[id]}\t#{c}" }
+  result = RubygemsTopPackages.build(extracted_dir:, limit:, output_path:)
+  puts "wrote #{result.fetch(:packages)} rows to #{output_path}"
 end
-puts "wrote #{top.size} rows to #{out}"
-puts "top 10: #{top.first(10).map { |id, c| "#{names[id]} (#{c})" }.join(", ")}"

@@ -19,6 +19,10 @@ RSpec.describe Ingestion::HTTPClient do
   def response(code, body: "[]", headers: {})
     resp = Struct.new(:code, :body, :headers) do
       def [](key) = headers[key]
+
+      def read_body
+        yield body
+      end
     end
     resp.new(code.to_s, body, headers)
   end
@@ -48,6 +52,23 @@ RSpec.describe Ingestion::HTTPClient do
       FileUtils.mkdir_p(cache_dir)
       File.write(client.send(:cache_path, url), "not json")
 
+      expect(client.send(:read_cache, url, ttl: nil)).to be_nil
+    end
+
+    it "ignores cache entries with malformed timestamps or mismatched identities" do
+      path = client.send(:cache_path, url)
+      FileUtils.mkdir_p(cache_dir)
+      File.write(
+        path,
+        JSON.generate("url" => url, "accept" => "application/json", "fetched_at" => "not-a-time", "body" => "[]")
+      )
+      expect(client.send(:read_cache, url, ttl: 60)).to be_nil
+
+      File.write(
+        path,
+        JSON.generate("url" => "https://rubygems.org/wrong", "accept" => "application/json",
+                      "fetched_at" => Time.now.utc.iso8601, "body" => "[]")
+      )
       expect(client.send(:read_cache, url, ttl: nil)).to be_nil
     end
 
@@ -126,12 +147,69 @@ RSpec.describe Ingestion::HTTPClient do
       expect(sleeps).to eq([2, 4, 8])
     end
 
-    it "returns nil on 404 without retrying" do
+    it "fails closed on an unexpected 404 without retrying" do
       transport = ->(_uri, _headers) { response(404) }
       client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
 
-      expect(client.get_json(url, ttl: 0)).to be_nil
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(described_class::NotFoundError, /returned 404/)
       expect(sleeps).to be_empty
+    end
+
+    it "returns nil on 404 only when the endpoint contract explicitly allows it" do
+      transport = ->(_uri, _headers) { response(404) }
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect(client.get_json(url, ttl: 0, allow_not_found: true)).to be_nil
+      expect(sleeps).to be_empty
+    end
+
+    it "retries transport failures from injected and default transports" do
+      calls = 0
+      transport = lambda do |_uri, _headers|
+        calls += 1
+        raise Net::ReadTimeout if calls < 3
+
+        response(200)
+      end
+      client = described_class.new(cache_dir:, transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect(client.get_json(url, ttl: 0)).to eq([])
+      expect(calls).to eq(3)
+      expect(sleeps).to eq([2, 4])
+    end
+
+    it "rejects oversized and invalid JSON responses before caching them" do
+      oversized = ->(_uri, _headers) { response(200, body: " " * (described_class::MAX_JSON_BYTES + 1)) }
+      client = described_class.new(cache_dir:, transport: oversized, sleeper: sleeps.method(:push), clock:)
+      expect { client.get_json(url, ttl: 0) }.to raise_error(described_class::Error, /more than/)
+
+      invalid = ->(_uri, _headers) { response(200, body: "{") }
+      client = described_class.new(cache_dir:, transport: invalid, sleeper: sleeps.method(:push), clock:)
+      expect { client.get_json(url, ttl: 0) }.to raise_error(described_class::Error, /invalid JSON/)
+      expect(File).not_to exist(client.send(:cache_path, url))
+    end
+
+    it "bounds the default JSON transport while streaming" do
+      stub_const("Ingestion::HTTPClient::MAX_JSON_BYTES", 5)
+      streamed = response(200)
+      streamed.define_singleton_method(:read_body) do |&block|
+        %w[abc def].each(&block)
+      end
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(streamed) }
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.get_json(url, ttl: 0) }
+        .to raise_error(described_class::Error, /returned more than 5 bytes/)
+    end
+
+    it "rejects non-HTTPS and credential-bearing URLs before transport" do
+      expect { client.get_json("http://rubygems.org/api/v1/versions.json", ttl: 0) }
+        .to raise_error(described_class::Error, /not an approved HTTPS URL/)
+      expect { client.get_json("https://user:pass@rubygems.org/api/v1/versions.json", ttl: 0) }
+        .to raise_error(described_class::Error, /not an approved HTTPS URL/)
     end
 
     it "fails closed on non-retryable errors" do
@@ -293,6 +371,20 @@ RSpec.describe Ingestion::HTTPClient do
       expect(File).not_to exist("#{destination}.part")
     end
 
+    it "enforces a caller-provided download size limit before replacement" do
+      File.binwrite(destination, "existing")
+      download_transport = lambda do |_uri, _headers, partial|
+        File.binwrite(partial, "too large")
+        response(200)
+      end
+      client = described_class.new(cache_dir:, download_transport:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:, max_bytes: 3) }
+        .to raise_error(described_class::Error, /received more than 3 bytes/)
+      expect(File.binread(destination)).to eq("existing")
+      expect(File).not_to exist("#{destination}.part")
+    end
+
     it "streams the default Net::HTTP response body without buffering it" do
       streamed = response(200)
       streamed.define_singleton_method(:read_body) do |&block|
@@ -309,6 +401,22 @@ RSpec.describe Ingestion::HTTPClient do
 
       expect(client.download(dump_url, destination:)).to eq(bytes: 7)
       expect(File.binread(destination)).to eq("archive")
+    end
+
+    it "stops the default stream when it crosses the download size limit" do
+      streamed = response(200)
+      streamed.define_singleton_method(:read_body) do |&block|
+        %w[abc def].each(&block)
+      end
+      http = instance_double(Net::HTTP)
+      allow(http).to receive(:request) { |_request, &block| block.call(streamed) }
+      allow(Net::HTTP).to receive(:start).and_yield(http)
+      client = described_class.new(cache_dir:, sleeper: sleeps.method(:push), clock:)
+
+      expect { client.download(dump_url, destination:, max_bytes: 5) }
+        .to raise_error(described_class::Error, /received more than 5 bytes/)
+      expect(File).not_to exist(destination)
+      expect(File).not_to exist("#{destination}.part")
     end
 
     it "follows the official HTTPS CDN redirect" do

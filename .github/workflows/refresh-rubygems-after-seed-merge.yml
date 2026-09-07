@@ -1,0 +1,136 @@
+name: Refresh RubyGems after seed merge
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: refresh-rubygems-after-seed-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  dispatch:
+    name: Dispatch protected refresh
+    if: >-
+      github.repository == 'starhaven-io/rakkan' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'automation/rubygems-seed'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    permissions:
+      actions: write # required to dispatch Refresh Data
+      contents: read # required to bind the dispatch to the current main SHA
+      pull-requests: read # required to verify the merged PR's complete file list
+    steps:
+      - name: Verify merged seed update and dispatch refresh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          if ! [[ "${MERGE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::merged pull request did not provide an immutable merge SHA"
+            exit 1
+          fi
+          files_json="$(gh api --paginate --slurp "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files")"
+          if ! jq -e '
+            [.[][] | {filename, status}] as $files |
+            ($files | length) >= 1 and
+            ($files | length) <= 4 and
+            all($files[]; .status == "modified") and
+            all($files[].filename;
+              . == "seed/rubygems/manifest.json" or
+              . == "seed/rubygems/top_1000.tsv" or
+              . == "seed/rubygems/tracked_versions.tsv.gz" or
+              . == "seed/rubygems/tracked_attestations.tsv.gz") and
+            ($files | map(.filename) | index("seed/rubygems/manifest.json")) != null
+          ' <<< "${files_json}" >/dev/null; then
+            echo "::error::merged automation PR contained an unexpected file set"
+            jq -r '.[][] | .filename' <<< "${files_json}"
+            exit 1
+          fi
+
+          for attempt in 1 2 3; do
+            main_sha="$(gh api "repos/${REPOSITORY}/git/ref/heads/main" --jq '.object.sha')"
+            comparison="$(gh api "repos/${REPOSITORY}/compare/${MERGE_SHA}...${main_sha}" --jq '.status')"
+            if [[ "${comparison}" != "identical" && "${comparison}" != "ahead" ]]; then
+              echo "::error::the reviewed seed merge is not an ancestor of current main"
+              exit 1
+            fi
+
+            request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}"
+            title="Refresh Data (all) [${request_id}]"
+            gh workflow run refresh-data.yml \
+              --repo "${REPOSITORY}" \
+              --ref main \
+              --field registry=all \
+              --field refresh_limit=1000 \
+              --field authorized_sha="${main_sha}" \
+              --field request_id="${request_id}"
+
+            refresh_run_id=""
+            for _lookup in {1..12}; do
+              refresh_run_id="$(gh run list --repo "${REPOSITORY}" \
+                --workflow refresh-data.yml --event workflow_dispatch --limit 50 \
+                --json databaseId,displayTitle | \
+                jq -r --arg title "${title}" '.[] | select(.displayTitle == $title) | .databaseId' | head -n 1)"
+              [[ -n "${refresh_run_id}" ]] && break
+              sleep 5
+            done
+            if [[ -z "${refresh_run_id}" ]]; then
+              echo "::error::could not identify the dispatched refresh run"
+              exit 1
+            fi
+
+            timeout 150m gh run watch "${refresh_run_id}" --repo "${REPOSITORY}" \
+              --interval 15 --exit-status || true
+            details="$(gh run view "${refresh_run_id}" --repo "${REPOSITORY}" --json status,conclusion,jobs)"
+            status="$(jq -r '.status // "unknown"' <<< "${details}")"
+            if [[ "${status}" != "completed" ]]; then
+              {
+                echo "## Registry refresh dispatched"
+                echo
+                echo "Merged seed update: [#${PR_NUMBER}](${PR_URL})"
+                echo
+                echo "Protected refresh run: ${refresh_run_id}"
+                echo
+                echo "The protected run is still ${status}; it remains authoritative and will report its own result."
+              } >> "${GITHUB_STEP_SUMMARY}"
+              exit 0
+            fi
+            conclusion="$(jq -r '
+              [.jobs[] | select(.name == "Refresh registry data") | .conclusion][0] //
+              .conclusion // "unknown"
+            ' <<< "${details}")"
+            if [[ "${conclusion}" == "success" ]]; then
+              break
+            fi
+            if [[ "${conclusion}" != "cancelled" && "${conclusion}" != "skipped" ]]; then
+              echo "::error::refresh run ${refresh_run_id} concluded ${conclusion}"
+              exit 1
+            fi
+            if (( attempt == 3 )); then
+              echo "::error::refresh was cancelled or skipped after ${attempt} attempts"
+              exit 1
+            fi
+          done
+
+          {
+            echo "## RubyGems refresh dispatched"
+            echo
+            echo "Merged seed update: [#${PR_NUMBER}](${PR_URL})"
+            echo
+            echo "Protected refresh run: ${refresh_run_id}"
+            echo
+            echo "The all-registry refresh completed for exact main SHA \`${main_sha}\`, which contains the reviewed merge."
+          } >> "${GITHUB_STEP_SUMMARY}"

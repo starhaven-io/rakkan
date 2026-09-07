@@ -10,7 +10,7 @@ const site = registrySite(slug);
 markRouteNotFound(Astro.response);
 ---
 
-<Base registry={slug} title="Not found · rakkan" freshness={false}>
+<Base registry={slug} canonicalPath={site.overviewPath} title="Not found · rakkan" freshness={false} noindex={true}>
   <section class="empty-state">
     <h1>Not found</h1>
     <p>

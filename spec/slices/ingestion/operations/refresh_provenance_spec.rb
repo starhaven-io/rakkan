@@ -35,7 +35,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     results = adapter.each_provenance(name: "psych", versions:).to_a
 
-    expect(results).to eq([[versions.first, provenance]])
+    expect(results).to eq([[versions.first, provenance, nil]])
     expect(adapter.requested).to eq(["psych-5.1.0-ruby"])
   end
 
@@ -58,11 +58,11 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(limit: 3, adapter:)
 
-    expect(result.value!).to eq(checked: 3, provenant: 1, settled: 0, remaining: 0)
+    expect(result.value!).to eq(checked: 3, provenant: 1, settled: 0, waived: 0, errors: 0, remaining: 0)
     expect(client.requests).to eq([cargo_url, serde_url])
   end
 
-  it "falls back for an omitted version and continues with the next crate" do
+  it "leaves an omitted version unchecked and continues with the next crate" do
     registry = create_registry!(name: "cratesio")
     cargo = create_package!(registry, name: "cargo-semver-checks")
     serde = create_package!(registry, name: "serde", rank: 2)
@@ -91,11 +91,12 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(limit: 3, adapter:)
 
-    expect(result.value!).to eq(checked: 3, provenant: 1, settled: 0, remaining: 0)
+    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0, waived: 0, errors: 1, remaining: 1)
     expect(client.requests).to eq([cargo_url, omitted_url, serde_url])
-    expect([cargo_trusted, cargo_omitted, serde_plain]).to all(
+    expect([cargo_trusted, serde_plain]).to all(
       satisfy { |id| versions.by_pk(id).one[:provenance_checked_at] }
     )
+    expect(versions.by_pk(cargo_omitted).one[:provenance_checked_at]).to be_nil
   end
 
   it "keeps a completed crate batch when a later crate request is interrupted" do
@@ -136,7 +137,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
     result = operation.call(adapter:)
 
     expect(result).to be_success
-    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0, remaining: 0)
+    expect(result.value!).to eq(checked: 2, provenant: 1, settled: 0, waived: 0, errors: 0, remaining: 0)
     expect(versions.by_pk(attested).one[:provenance_kind]).to eq("sigstore_attestation")
     expect(versions.by_pk(plain).one).to include(provenance_kind: nil)
     expect(versions.by_pk(plain).one[:provenance_checked_at]).not_to be_nil
@@ -168,7 +169,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(adapter:)
 
-    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, remaining: 0)
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 0)
     expect(versions.by_pk(other_version).one[:provenance_checked_at]).to be_nil
   end
 
@@ -182,7 +183,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     result = operation.call(adapter:)
 
-    expect(result.value!).to eq(checked: 2, provenant: 0, settled: 1, remaining: 0)
+    expect(result.value!).to eq(checked: 2, provenant: 0, settled: 1, waived: 0, errors: 0, remaining: 0)
     # The old version is recorded as observed, not left unchecked, but no
     # request was spent on it. An unknown publish time still gets asked.
     expect(versions.by_pk(old).one[:provenance_checked_at]).not_to be_nil
@@ -201,13 +202,13 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
 
     first = operation.call(limit: 2, adapter:)
 
-    expect(first.value!).to eq(checked: 2, provenant: 0, settled: 0, remaining: 1)
+    expect(first.value!).to eq(checked: 2, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 1)
     expect(adapter.requested).to eq(%w[serde-3.0.0-ruby serde-2.0.0-ruby])
     expect(versions.by_pk(oldest).one[:provenance_checked_at]).to be_nil
 
     second = operation.call(limit: 2, adapter:)
 
-    expect(second.value!).to eq(checked: 1, provenant: 0, settled: 0, remaining: 0)
+    expect(second.value!).to eq(checked: 1, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 0)
     expect(adapter.requested).to eq(%w[serde-3.0.0-ruby serde-2.0.0-ruby serde-1.0.0-ruby])
     expect(versions.by_pk(oldest).one[:provenance_checked_at]).not_to be_nil
   end
@@ -232,8 +233,140 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
     allow(adapter).to receive(:fetch_provenance).and_call_original
     result = operation.call(limit: 2, adapter:)
 
-    expect(result.value!).to eq(checked: 1, provenant: 0, settled: 0, remaining: 0)
+    expect(result.value!).to eq(checked: 1, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 0)
     expect(versions.by_pk(interrupted).one[:provenance_checked_at]).not_to be_nil
+  end
+
+  it "isolates malformed version data without stamping it or starving later rows" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    malformed = create_version!(pkg, number: "2.0.0", published_at: Time.utc(2026, 8, 2))
+    valid = create_version!(pkg, number: "1.0.0", published_at: Time.utc(2026, 8, 1))
+    adapter = FakeProvenanceAdapter.new
+    allow(adapter).to receive(:fetch_provenance).and_wrap_original do |method, **args|
+      raise Ingestion::HTTPClient::InvalidDataError, "certificate is malformed" if args[:number] == "2.0.0"
+
+      method.call(**args)
+    end
+
+    result = nil
+    expect { result = operation.call(limit: 2, adapter:) }
+      .to output(/provenance check left unchecked/).to_stderr
+
+    expect(result.value!).to eq(checked: 1, provenant: 0, settled: 0, waived: 0, errors: 1, remaining: 1)
+    expect(versions.by_pk(malformed).one[:provenance_checked_at]).to be_nil
+    expect(versions.by_pk(valid).one[:provenance_checked_at]).not_to be_nil
+  end
+
+  it "excludes yanked versions from provenance work" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    yanked = create_version!(pkg, number: "5.1.0", yanked: true)
+    adapter = FakeProvenanceAdapter.new
+
+    result = operation.call(adapter:)
+
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 0)
+    expect(adapter.requested).to be_empty
+    expect(versions.by_pk(yanked).one[:provenance_checked_at]).to be_nil
+  end
+
+  it "temporarily waives only an exact persistent 404 without recording a negative observation" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    missing = create_version!(pkg, number: "5.1.0")
+    adapter = FakeProvenanceAdapter.new
+    allow(adapter).to receive(:fetch_provenance).and_raise(
+      Ingestion::HTTPClient::NotFoundError, "version is no longer exposed"
+    )
+    entry = Ingestion::ProvenanceWaivers::Entry.new(
+      registry: "rubygems", package: "psych", number: "5.1.0", platform: "ruby",
+      reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
+    )
+    waivers = Ingestion::ProvenanceWaivers.new([entry])
+
+    result = nil
+    expect { result = operation.call(adapter:, waivers:) }
+      .to output(/provenance 404 waived.*expires 2026-12-01/).to_stderr
+
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, waived: 1, errors: 0, remaining: 0)
+    expect(versions.by_pk(missing).one).to include(provenance_kind: nil, provenance_checked_at: nil)
+  end
+
+  it "probes bounded waivers without consuming or starving the ordinary limit" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    create_version!(pkg, number: "1.0.0", published_at: Time.utc(2026, 8, 1))
+    create_version!(pkg, number: "2.0.0", published_at: Time.utc(2026, 8, 2))
+    create_version!(pkg, number: "3.0.0", published_at: Time.utc(2026, 8, 3))
+    adapter = FakeProvenanceAdapter.new
+    allow(adapter).to receive(:fetch_provenance).and_wrap_original do |method, **args|
+      if %w[2.0.0 3.0.0].include?(args[:number])
+        adapter.requested << "#{args[:name]}-#{args[:number]}-#{args[:platform]}"
+        raise Ingestion::HTTPClient::NotFoundError, "version is no longer exposed"
+      end
+
+      method.call(**args)
+    end
+    waivers = Ingestion::ProvenanceWaivers.new(
+      %w[2.0.0 3.0.0].map do |number|
+        Ingestion::ProvenanceWaivers::Entry.new(
+          registry: "rubygems", package: "psych", number:, platform: "ruby",
+          reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
+        )
+      end
+    )
+
+    result = nil
+    expect { result = operation.call(limit: 1, adapter:, waivers:) }
+      .to output(/provenance 404 waived.*provenance 404 waived/m).to_stderr
+
+    expect(result.value!).to eq(checked: 1, provenant: 0, settled: 0, waived: 2, errors: 0, remaining: 0)
+    expect(adapter.requested).to eq(%w[psych-1.0.0-ruby psych-3.0.0-ruby psych-2.0.0-ruby])
+  end
+
+  it "does not apply a 404 waiver to malformed successful responses" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    malformed = create_version!(pkg, number: "5.1.0")
+    adapter = FakeProvenanceAdapter.new
+    allow(adapter).to receive(:fetch_provenance).and_raise(
+      Ingestion::HTTPClient::InvalidDataError, "invalid response"
+    )
+    entry = Ingestion::ProvenanceWaivers::Entry.new(
+      registry: "rubygems", package: "psych", number: "5.1.0", platform: "ruby",
+      reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
+    )
+
+    result = nil
+    expect { result = operation.call(adapter:, waivers: Ingestion::ProvenanceWaivers.new([entry])) }
+      .to output(/provenance check left unchecked/).to_stderr
+
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, waived: 0, errors: 1, remaining: 1)
+    expect(versions.by_pk(malformed).one[:provenance_checked_at]).to be_nil
+  end
+
+  it "removes a stale positive claim when its exact recheck is waived as unknown" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych", first_provenant_at: Time.utc(2026, 1, 1))
+    stale = create_version!(
+      pkg, number: "5.1.0", provenance:, provenance_checked_at: Time.utc(2026, 1, 1)
+    )
+    adapter = FakeProvenanceAdapter.new
+    allow(adapter).to receive(:fetch_provenance).and_raise(
+      Ingestion::HTTPClient::NotFoundError, "version is no longer exposed"
+    )
+    entry = Ingestion::ProvenanceWaivers::Entry.new(
+      registry: "rubygems", package: "psych", number: "5.1.0", platform: "ruby",
+      reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
+    )
+
+    operation.call(
+      stale_after: 3600, adapter:, waivers: Ingestion::ProvenanceWaivers.new([entry])
+    )
+
+    expect(versions.by_pk(stale).one).to include(provenance_kind: nil, provenance_checked_at: nil)
+    expect(Hanami.app["repos.package_repo"].find(registry.id, "psych").first_provenant_at).to be_nil
   end
 
   it "fails cleanly for an unknown registry" do

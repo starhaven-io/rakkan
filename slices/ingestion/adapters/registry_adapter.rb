@@ -35,7 +35,8 @@ module Ingestion
       # (as above) or nil when the registry reports none.
       def fetch_provenance(name:, number:, platform:) = raise NotImplementedError
 
-      # Live: yield each version and its provenance. Registries may override
+      # Live: yield each version, its provenance, and any isolated data error.
+      # Registries may override
       # this to answer several versions with one request while retaining the
       # per-version write boundary in RefreshProvenance.
       def each_provenance(name:, versions:)
@@ -45,7 +46,10 @@ module Ingestion
           provenance = fetch_provenance(
             name:, number: version[:number], platform: version[:platform]
           )
-          yield(version, provenance)
+          yield(version, provenance, nil)
+        rescue Ingestion::HTTPClient::InvalidDataError,
+               Ingestion::HTTPClient::NotFoundError => e
+          yield(version, nil, e)
         end
       end
 
@@ -57,11 +61,6 @@ module Ingestion
       # did not observe provenance). Versions seeded without provenance are
       # considered checked only when this timestamp is present.
       def provenance_seed_as_of = nil
-
-      # Registries whose tracked set comes from a dated dump return that
-      # dump's day, so rerunning the same seed replaces one observation
-      # instead of adding one per dispatch.
-      def snapshot_taken_on = nil
 
       # Earliest publish time at which this registry could record provenance
       # (nil when it always could, or when the date is unknown). Versions

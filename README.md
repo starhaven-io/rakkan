@@ -13,11 +13,11 @@ most-downloaded packages have adopted it, and how that changes over time.
 
 RubyGems.org is the first production registry. The schema and ingestion
 pipeline are registry-agnostic: crates.io carries its tracked set in
-`seed/cratesio/`, reads provenance from the API, has completed its initial
-production backfill, and is exposed by the web tier. A weekly workflow
-proposes its seed refresh as a reviewed pull request, and PyPI reads provenance while its tracked set
-and discovery cursor remain the next implementation phase. The ingestion
-engine is built with [Hanami 3.0](https://hanakai.org/hanami).
+`seed/cratesio/`, reads provenance from the API, and is exposed by the web
+tier. Weekly workflows propose both production tracked-set refreshes as
+reviewed pull requests. PyPI reads provenance, while its tracked set and
+durable discovery cursor remain the next implementation phase. The ingestion
+engine is built with [Hanami 3.0.2](https://hanakai.org/hanami).
 
 Where the provenance signal actually lives, with recorded evidence, is
 documented in [DATA_SOURCES.md](DATA_SOURCES.md). Headline: for RubyGems it
@@ -31,14 +31,16 @@ against the gem and a trusted-publisher identity at push time, and rakkan
 deliberately treats the registry's verification as authoritative (deps.dev
 independently reports these attestations as verified). Counts here are
 therefore "attestations the registry accepted", not an independent audit.
+The rationale is recorded in
+[ADR 0001](docs/adr/0001-registry-accepted-provenance.md).
 
 ## Running it
 
-Two halves: a headless Ruby ingestion engine (Ruby ≥ 3.3 per the locked
-gems; developed on 4.0.6, pinned in `.ruby-version`) and a web tier under
-`site/` (Astro on Cloudflare Workers reading D1; Node ≥ 26). One command sets up both from a fresh clone: engine
-deps, databases, seed data (committed, dump-derived; no network), site
-deps, and the local D1:
+Two halves: a headless Ruby ingestion engine (Ruby ≥ 3.3 per the locked gems;
+developed on 4.0.6, pinned in `.ruby-version`) and a web tier under `site/`
+(Astro on Cloudflare Workers reading D1; Node ≥ 26). One command sets up both
+from a fresh clone: engine dependencies, databases, committed dump-derived
+seed data, site dependencies, and the local D1:
 
 ```sh
 bin/setup
@@ -52,100 +54,119 @@ just dev
 
 The equivalent manual steps, when you want them piecemeal: `bundle
 install`, `cp .env.example .env`, `bundle exec hanami db prepare`,
-`bundle exec rake ingest:seed`, `bundle exec rake snapshot:take`, then
-`just install-site`, and finally `just site-db` to export and load the
-local D1.
+`bundle exec rake ingest:seed`, `bundle exec rake "ingest:seed[cratesio]"`,
+`bundle exec rake snapshot:take`, then `just install-site`, and finally `just
+site-db` to export and load the local D1. The local crates.io tracked set is
+available immediately, but its overview remains unsnapshotted until the live
+provenance refresh completes.
 
-## Keeping it fresh (live API tasks)
+## Keeping it fresh
 
 ```sh
 bundle exec rake ingest:discover      # find versions published since the seed dump
-bundle exec rake "ingest:refresh[50]" # check provenance for up to N unchecked versions
+bundle exec rake "ingest:refresh[50]" # check up to N ordinary versions plus waiver probes
 bundle exec rake snapshot:take        # record the current adoption stats
 ```
 
-Both live tasks go through a polite client: identifying User-Agent, ~4
-requests/second (rubygems.org documents 10 rps), exponential backoff
-honoring Retry-After, and an on-disk cache under `var/cache/`. Discovery
-reruns serve already-seen feed pages from that cache; provenance checks
-deliberately bypass the read side of the cache so they observe current
-registry state. Everything is idempotent; running twice converges. If
-discovery exhausts its page budget, it fails after persisting its cursor so
-production cannot publish a partial observation. The workflow retries from
-that cursor up to three times in the same database before failing the run.
+Live traffic goes through one polite client: an identifying User-Agent,
+registry-specific rate limits, bounded responses and retries, `Retry-After`
+support, and atomic disk caching under `var/cache/`. Discovery can reuse cached
+feed pages; provenance checks bypass cache reads so they observe current state.
+Unwaived unexpected 404s, malformed JSON, incomplete pages, and non-progressing cursors
+fail closed without stamping a negative provenance check.
 
-The inputs update at different cadences, but production observations align to
-RubyGems.org's weekly dump:
+The tracked-set workflows run each Monday:
 
-- **Weekly (public dump):** RubyGems.org publishes its dump weekly, so the
-  tracked set itself (the top-1,000 ranking and download counts) is
-  re-derived on that cadence with the scripts under `research/`
-  (`extract_dump.rb` → `top_gems.rb` → `filter_versions.rb` →
-  `build_seed.rb`), and packages that fell out of the top 1,000 are
-  untracked. Between dumps the denominator intentionally holds still.
-- **Post-dump (live APIs):** discovery pulls newly published versions from the
-  registry's feed and refresh checks their attestations once per week. The
-  resulting observation is dated to the Monday dump so the series has one
-  comparable point per dump rather than flat daily entries.
+- `Update RubyGems seed` discovers the newest official weekly PostgreSQL dump,
+  verifies its listed size and SHA-256, parses named COPY columns, and rebuilds
+  the top 1,000 with its versions and attestations.
+- `Update crates.io seed` streams the official daily database dump and rebuilds
+  the top 1,000 with its version history. The dump has no provenance signal,
+  so provenance remains an API refresh.
 
-The `Refresh Data` workflow runs at 06:17 UTC each Tuesday, after the Monday
-dump, against a fresh engine database restored from production D1. It replaces
-D1 only after ingestion, snapshotting, weekly history normalization, and export
-all succeed. Changes under `site/` deploy separately through the `Deploy Site`
-workflow; site deploys do not rewrite data.
+Both workflows reject stale, future-dated, truncated, incorrectly ranked, duplicate, or
+referentially invalid data. A rerun against the exact current dump succeeds as
+a no-op; an older dump or reused timestamp with different content fails. They
+compare compressed files by semantic content, then update a fixed automation
+branch and open a seed-only pull request. Source workflows cannot approve or
+merge that pull request. If the same candidate is already present in the one
+open same-repository automation pull request, the workflow leaves its head,
+body, and approval state untouched. The pull-request diff may be a nonempty
+subset of the expected files but must include the manifest; the full candidate
+tree is compared byte-for-byte, and any unexpected file fails closed. A post-merge listener
+rechecks its repository, base, branch, complete file set, and immutable merge
+SHA before dispatching the
+protected all-registry refresh. It verifies that merge remains an ancestor of
+current `main`, authorizes one exact current SHA, waits for the refresh result,
+and retries a dispatch cancelled or skipped outside the production queue. The
+shared production lock retains up to 100 pending deploys, refreshes, and
+rollbacks instead of silently replacing an earlier pending run. Each seed
+listener requests both registries, and a run waiting for protected-environment
+approval remains authoritative after the listener's bounded wait. Hosted
+rulesets must require an independent human approval; repository text alone
+cannot enforce or prove that control.
 
-Pushes that change the refresh workflow, database schema, normalization, or the
-RubyGems seed run the same ingestion and export path as a dry run. They never
-replace production D1 or change production refresh-issue state; publication is
-limited to scheduled and explicitly dispatched runs.
+`Refresh Data` restores production history into a fresh engine database,
+validates the committed seed is no more than nine days old, performs resumable
+ingestion within a bounded wall-clock budget, and snapshots only a complete
+observation. RubyGems discovery must drain. An incomplete crates.io backfill
+or RubyGems provenance refresh persists progress but withholds its snapshot.
+Yanked versions require no provenance lookup. A persistent exact per-version
+404 can be handled only by an expiring, source-controlled waiver; it is neither
+stamped nor counted as a negative provenance observation. At most 100 reviewed
+waivers are allowed, and their exact versions are probed separately so they
+cannot consume or starve the ordinary refresh limit. An expired entry is
+reported and becomes inactive, so its exact version returns to the ordinary
+fail-closed error path without stopping unrelated registries.
+The refresh wrapper freezes one UTC run date for waiver evaluation and the
+resulting snapshot, even if its subprocesses cross midnight. Snapshot dates
+therefore describe the day on which the complete refresh began, and a delayed
+seed merge cannot rewrite an older dump-dated history point.
 
-The same workflow is the crates.io refresh entry point. The initial production
-backfill completed against the 2026-08-21 dump. Each run restores the prior D1
-state, re-seeds idempotently from the committed crates.io dump, settles releases
-from before trusted publishing existed without API calls, and persists the next
-bounded batch. It records a crates.io snapshot only after the refresh is
-complete, so a partial observation is not presented as an adoption point. The
-snapshot is dated to the committed dump rather than the dispatch, so rerunning
-an unchanged seed replaces that observation instead of adding a flat point on
-an arbitrary day.
-Refresh retries share a 30-minute wall-clock budget, and the engine reports the
-authoritative remaining backlog from the same scope it uses to select work.
+Before production D1 is replaced, the workflow captures a D1 Time Travel
+bookmark and uploads it with a checksum-bound recovery manifest and full SQL
+export for evidence. It then requires the deployed Worker's health contract to
+accept the candidate schema, and
+requires remote schema and exact row counts to match the local export. Worker
+deployment, D1 replacement, and rollback share a serialization lock.
+Push-triggered refresh dry runs use a fresh local database and receive no
+Cloudflare environment or token. Site deployment is separate and performs a
+read-only D1 schema-contract check while holding the production transition
+lock before deploying the Worker, then verifies that the deployed health
+endpoint advertises the expected compatibility set. The first health-endpoint
+rollout recognizes only the exact historical one-column export marker as
+legacy schema 1; all later and post-deploy health checks remain strict.
+The Worker also exposes a D1-independent compatibility route so rollback can
+validate reader support even when the current database is unhealthy.
 
-At 05:00 UTC each Monday, `Update crates.io seed` streams the current daily dump
-into runner-temporary storage, extracts it, and rebuilds the top-1,000 seed. It
-rejects a dump that is not newer than the committed manifest, is more than two
-days old, or is implausibly future-dated. Package data is compared directly and
-the version seed by decompressed content, so gzip platform metadata and a newer
-manifest alone do not create churn.
-Failures open or update a repository issue, which the next successful seed
-update closes.
-
-When tracked content changes, a separate proposal job re-verifies the
-generated seed against the committed one, then updates the fixed
-`automation/cratesio-seed` branch and opens or refreshes the seed pull request
-as the org's bot app; the workflow's own token still cannot create or approve
-pull requests. Bot-opened PRs run the normal required CI, and a reviewed human
-merge remains the production gate. After that narrowly scoped PR merges,
-`Refresh crates.io after seed merge` verifies its branch, repository, and
-complete file list before dispatching the existing
-protected `Refresh Data` workflow with `registry=cratesio` and
-`refresh_limit=1000`. No crates.io seed path is added to the push-triggered dry
-run, and Cloudflare credentials remain confined to `Refresh Data`.
-
-Schema changes that site queries depend on must land before the corresponding
-site change: merge the schema, dispatch `Refresh Data`, then merge the site
-query. Push runs are deliberately dry runs and cannot order those production
-deployments automatically.
+The measurable freshness contract is in
+[docs/data-freshness.md](docs/data-freshness.md). Hosted setup, schema rollout,
+rollback, and incident procedures are in
+[docs/operations.md](docs/operations.md).
 
 ## Tests
 
+Run the repository gate:
+
 ```sh
-bundle exec rspec
+just check-tools
+just check
 ```
 
-The suite makes no network calls: fixtures under `spec/fixtures/` are
-distilled from the real dump-derived seeds plus recorded registry
-responses (see `research/`).
+It enforces structural and semantic seed validity without making unrelated CI
+expire as the wall clock advances. Protected refreshes and seed updaters retain
+the freshness gates. The command also enforces engine line/branch and
+TypeScript line/branch/function/statement
+coverage thresholds, Ruby and site tests, RuboCop, ShellCheck, Prettier, Astro
+type checking and production build, npm install-script policy, actionlint,
+zizmor, pinprick, and spelling. The test suites make no network calls: fixtures
+under `spec/fixtures/` are distilled from dump-derived seeds and recorded
+registry responses. Hosted dependency, CodeQL, and Codecov jobs remain hosted
+evidence and are not implied by the local gate.
+
+`just check-tools` reports missing machine-wide audit executables with their
+Homebrew package names. `bin/setup` installs project dependencies, not those
+global tools; see [CONTRIBUTING.md](CONTRIBUTING.md) for the fresh-clone path.
 
 ## Layout
 
@@ -155,11 +176,19 @@ responses (see `research/`).
 - `slices/ingestion/`: registry adapter interface, RubyGems ingestion,
   crates.io and PyPI provenance adapters, sigstore attestation parsing, and
   the ingest/snapshot operations
-- `seed/rubygems/`: compact tracked-set data derived from the 2026-08-10
-  weekly dump (see `manifest.json`)
-- `seed/cratesio/`: compact tracked-set data derived from the current committed
-  daily dump; newly added versions remain unchecked until the provenance refresh
+- `seed/rubygems/`: compact tracked-set data derived from the exact weekly dump
+  recorded in its `manifest.json`
+- `seed/cratesio/`: compact tracked-set data derived from the exact daily dump
+  recorded in its `manifest.json`; new versions remain unchecked until refresh
 - `research/`: the dump-processing scripts and recorded registry samples
+
+## Project documentation
+
+- [Architecture and trust boundaries](docs/architecture.md)
+- [Data-source evidence](DATA_SOURCES.md)
+- [Operations, rollback, and incident response](docs/operations.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md) and [code of conduct](CODE_OF_CONDUCT.md)
 
 <!-- fleet:block license-section -->
 

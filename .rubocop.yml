@@ -5,6 +5,7 @@ AllCops:
   Exclude:
     - "vendor/**/*"
     - "db/**/*"
+    - "var/**/*"
 
 # Ingestion operations and the streaming research scripts read as one
 # narrative each; splitting them to satisfy a metric would hurt readability.

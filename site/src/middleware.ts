@@ -1,6 +1,6 @@
 import { defineMiddleware } from 'astro:middleware';
 import { GenerationTracker, isCacheableRequest, serveVersionedPage } from './lib/cache.ts';
-import { exportGeneratedAt } from './lib/d1.ts';
+import { exportGeneratedAt, SchemaVersionError } from './lib/d1.ts';
 import { getDb } from './lib/db.ts';
 
 // Cloudflare applies public/_headers only to static assets, but every rakkan
@@ -41,7 +41,7 @@ function edgeCache(): Cache | undefined {
 const generationTracker = new GenerationTracker();
 
 export const onRequest = defineMiddleware(async (context, next) => {
-  const cacheable = isCacheableRequest(context.request.method, context.request.url);
+  const cacheable = isCacheableRequest(context.request.method, context.url);
   const cache = cacheable ? edgeCache() : undefined;
 
   const render = async () => {
@@ -58,6 +58,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!cache) return render();
 
-  const generatedAt = await generationTracker.current(() => exportGeneratedAt(getDb()));
-  return serveVersionedPage(cache, context.request.url, generatedAt, render);
+  const generatedAt = await generationTracker.current(
+    () => exportGeneratedAt(getDb()),
+    (error) => !(error instanceof SchemaVersionError),
+  );
+  return serveVersionedPage(cache, context.url, generatedAt, render);
 });

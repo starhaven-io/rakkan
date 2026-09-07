@@ -2,6 +2,8 @@
 
 require "json"
 require "time"
+require "cgi"
+require "uri"
 require "zlib"
 
 module Ingestion
@@ -27,7 +29,7 @@ module Ingestion
         manifest = File.join(@seed_dir, "manifest.json")
         return nil unless File.exist?(manifest)
 
-        Time.parse(JSON.parse(File.read(manifest, encoding: "UTF-8")).fetch("dump_taken_at"))
+        Time.iso8601(JSON.parse(File.read(manifest, encoding: "UTF-8")).fetch("dump_taken_at"))
       end
 
       # The RubyGems dump includes the complete attestations table at the same
@@ -82,8 +84,11 @@ module Ingestion
         # ttl: 0 bypasses the read cache: a provenance check exists to observe
         # current registry state, and a cached empty answer would stay empty
         # forever. The response is still written to the cache for the record.
-        bundles = http_client.get_json("#{API_BASE}/attestations/#{full_name}.json", ttl: 0)
-        return nil if bundles.nil? || bundles.empty?
+        bundles = http_client.get_json("#{API_BASE}/attestations/#{path_segment(full_name)}.json", ttl: 0)
+        unless bundles.is_a?(Array)
+          raise Ingestion::HTTPClient::InvalidDataError, "RubyGems attestations response must be an array"
+        end
+        return nil if bundles.empty?
 
         Rubygems::Attestation.parse(bundles)
       end
@@ -96,20 +101,25 @@ module Ingestion
         drained = true
         pages = 0
         (1..max_pages).each do |page|
-          url = "#{API_BASE}/timeframe_versions.json?from=#{from.utc.iso8601}&to=#{to.utc.iso8601}&page=#{page}"
+          query = URI.encode_www_form(from: from.utc.iso8601, to: to.utc.iso8601, page:)
+          url = "#{API_BASE}/timeframe_versions.json?#{query}"
           batch = http_client.get_json(url, ttl: 3600)
           pages = page
-          break if batch.nil? || batch.empty?
+          unless batch.is_a?(Array)
+            raise Ingestion::HTTPClient::InvalidDataError, "RubyGems timeframe response must be an array"
+          end
+          break if batch.empty?
 
+          previous_published_at = entries.last&.fetch(:published_at, nil)
           batch.each do |entry|
-            entries << {
-              package_name: entry.fetch("name"),
-              number: entry.fetch("number"),
-              platform: entry.fetch("platform"),
-              published_at: Time.parse(entry.fetch("created_at")),
-              prerelease: entry.fetch("prerelease"),
-              yanked: entry.fetch("yanked", false)
-            }
+            parsed = parse_feed_entry(entry, from:, to:)
+            if previous_published_at && parsed.fetch(:published_at) < previous_published_at
+              raise Ingestion::HTTPClient::InvalidDataError,
+                    "RubyGems timeframe response is not ordered by created_at"
+            end
+
+            entries << parsed
+            previous_published_at = parsed.fetch(:published_at)
           end
 
           if page == max_pages
@@ -147,6 +157,43 @@ module Ingestion
 
       def unescape_copy(value)
         value.gsub(/\\[\\tnr]/, COPY_ESCAPES)
+      end
+
+      def parse_feed_entry(entry, from:, to:)
+        unless entry.is_a?(Hash)
+          raise Ingestion::HTTPClient::InvalidDataError, "RubyGems timeframe entry must be an object"
+        end
+
+        published_at = Time.iso8601(entry.fetch("created_at")).utc
+        unless published_at.between?(from.utc, to.utc)
+          raise Ingestion::HTTPClient::InvalidDataError,
+                "RubyGems timeframe entry falls outside the requested window"
+        end
+
+        package_name = required_string(entry, "name")
+        number = required_string(entry, "number")
+        platform = required_string(entry, "platform")
+        prerelease = entry.fetch("prerelease")
+        yanked = entry.fetch("yanked", false)
+        unless [prerelease, yanked].all? { |value| [true, false].include?(value) }
+          raise Ingestion::HTTPClient::InvalidDataError, "RubyGems timeframe flags must be booleans"
+        end
+
+        { package_name:, number:, platform:, published_at:, prerelease:, yanked: }
+      rescue KeyError, ArgumentError => e
+        raise Ingestion::HTTPClient::InvalidDataError,
+              "invalid RubyGems timeframe entry: #{e.message}", cause: e
+      end
+
+      def required_string(entry, field)
+        value = entry.fetch(field)
+        return value if value.is_a?(String) && !value.empty?
+
+        raise ArgumentError, "#{field} must be a non-empty string"
+      end
+
+      def path_segment(value)
+        CGI.escape(value).gsub("+", "%20")
       end
 
       def parse_utc(value)

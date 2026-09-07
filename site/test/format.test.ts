@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import {
   escapeLike,
   formatCount,
+  normalizeSearchQuery,
   packageNoun,
   percentage,
   provenanceLabel,
@@ -12,6 +13,7 @@ import {
   searchResultSummary,
   shortDate,
   utcStamp,
+  urlHostname,
 } from '../src/lib/format.ts';
 
 test('percentage matches the engine semantics, including decimal halfway values', () => {
@@ -74,6 +76,12 @@ test('searchResultSummary keeps the registry name and sentence punctuation toget
   assert.equal(searchResultSummary('rubygems', 'RubyGems.org', 12), '12 tracked gems matched in RubyGems.org.');
 });
 
+test('normalizeSearchQuery trims and bounds user-controlled search work', () => {
+  assert.equal(normalizeSearchQuery('  rack  '), 'rack');
+  assert.equal(normalizeSearchQuery('x'.repeat(101)), 'x'.repeat(100));
+  assert.equal(normalizeSearchQuery(null), '');
+});
+
 test('provenanceLabel names the signal per kind', () => {
   assert.equal(provenanceLabel('sigstore_attestation'), 'Sigstore');
   assert.equal(provenanceLabel('trustpub_metadata'), 'Trusted publisher');
@@ -82,7 +90,9 @@ test('provenanceLabel names the signal per kind', () => {
 });
 
 test('repositoryLabel shortens repository URLs for link text', () => {
-  assert.equal(repositoryLabel('https://github.com/ruby/psych'), 'ruby/psych');
-  assert.equal(repositoryLabel('https://github.com/ruby/psych.git'), 'ruby/psych');
+  assert.equal(repositoryLabel('https://github.com/ruby/psych'), 'github.com/ruby/psych');
+  assert.equal(repositoryLabel('https://github.com/ruby/psych.git'), 'github.com/ruby/psych');
   assert.equal(repositoryLabel('not a url'), 'not a url');
+  assert.equal(urlHostname('https://github.com/ruby/psych'), 'github.com');
+  assert.equal(urlHostname('not a url'), 'not a url');
 });

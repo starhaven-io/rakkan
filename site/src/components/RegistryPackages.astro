@@ -1,37 +1,46 @@
 ---
 import Base from '../layouts/Base.astro';
-import { getDb } from '../lib/db.ts';
-import { allTracked, registryByName } from '../lib/d1.ts';
+import Pagination from './Pagination.astro';
+import type { PageResult, PackageRow, Registry, TrackedSummary } from '../lib/d1.ts';
 import { formatCount, packageNoun, shortDate } from '../lib/format.ts';
 import { registrySite, type RegistrySlug } from '../lib/registries.ts';
 
 interface Props {
   slug: RegistrySlug;
+  registry: Registry | null;
+  packagePage: PageResult<PackageRow> | null;
+  summary: TrackedSummary;
 }
 
-const { slug } = Astro.props;
+const { slug, registry, packagePage, summary } = Astro.props;
 const site = registrySite(slug);
-const db = getDb();
-const registry = await registryByName(db, slug);
-const packages = registry ? await allTracked(db, registry.id) : [];
-const provenant = packages.filter((pkg) => pkg.first_provenant_at).length;
+const packages = packagePage?.items ?? [];
 const noun = packageNoun(registry?.name, 2);
 ---
 
-<Base registry={slug} title={`All ${noun} · rakkan`}>
+<Base
+  registry={slug}
+  canonicalPath={site.packagesPath}
+  title={`All ${noun} · rakkan`}
+  description={`The ${formatCount(summary.total)} most-downloaded ${noun} on ${registry?.display_name ?? 'the registry'}, ranked with observed publishing provenance.`}
+  canonicalPage={packagePage?.page}
+>
   <header class="page-heading">
     <h1>All tracked {noun}</h1>
     <p>
-      The full tracked set: the top {formatCount(packages.length)}
+      The full tracked set: the top {formatCount(summary.total)}
       {noun} on{' '}
       {registry?.display_name ?? 'the registry'} by total downloads, in rank order.{' '}
-      {formatCount(provenant)} carry provenance on at least one release.
+      {formatCount(summary.provenant)} carry provenance on at least one release.
     </p>
   </header>
 
   <section class="panel">
     <div class="table-wrap">
       <table>
+        <caption class="visually-hidden"
+          >{registry?.display_name ?? 'Registry'} tracked packages in download-rank order</caption
+        >
         <thead>
           <tr>
             <th class="num">Rank</th>
@@ -64,5 +73,15 @@ const noun = packageNoun(registry?.name, 2);
         </tbody>
       </table>
     </div>
+    {
+      packagePage && (
+        <Pagination
+          path={site.packagesPath}
+          page={packagePage.page}
+          pageCount={packagePage.pageCount}
+          label={`${registry?.display_name ?? 'Registry'} package pages`}
+        />
+      )
+    }
   </section>
 </Base>

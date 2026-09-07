@@ -1,6 +1,7 @@
 {
   "source": "crates.io daily database dump",
   "source_url": "https://static.crates.io/db-dump.tar.gz",
+  "archive_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "dump_taken_at": "2026-08-20T02:00:21.810126238Z",
   "source_commit": "42df592c355587e792e7424563b336c7f01344d0",
   "built_by": "research/build_cratesio_seed.rb",

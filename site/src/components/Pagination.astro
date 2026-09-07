@@ -1,0 +1,24 @@
+---
+import { pageHref } from '../lib/pagination.ts';
+
+interface Props {
+  path: string;
+  page: number;
+  pageCount: number;
+  label: string;
+}
+
+const { path, page, pageCount, label } = Astro.props;
+---
+
+{
+  pageCount > 1 && (
+    <nav class="pagination" aria-label={label}>
+      {page > 1 ? <a href={pageHref(path, page - 1)}>← Previous</a> : <span aria-hidden="true">← Previous</span>}
+      <span>
+        Page <strong>{page}</strong> of <strong>{pageCount}</strong>
+      </span>
+      {page < pageCount ? <a href={pageHref(path, page + 1)}>Next →</a> : <span aria-hidden="true">Next →</span>}
+    </nav>
+  )
+}

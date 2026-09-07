@@ -32,7 +32,6 @@ ${urls.map((url) => `  <url><loc>${url}</loc></url>`).join('\n')}
   return new Response(body, {
     headers: {
       'content-type': 'application/xml; charset=utf-8',
-      'cache-control': 'public, max-age=86400',
     },
   });
 };

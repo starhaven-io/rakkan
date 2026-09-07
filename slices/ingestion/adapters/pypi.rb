@@ -22,12 +22,20 @@ module Ingestion
         project = path_segment(name)
         version = path_segment(number)
         release = http_client.get_json("#{API_BASE}/pypi/#{project}/#{version}/json", ttl: 3600)
-        return nil unless release
+        unless release.is_a?(Hash) && release["urls"].is_a?(Array)
+          raise Ingestion::HTTPClient::InvalidDataError,
+                "PyPI release response must contain a urls array"
+        end
 
-        provenance_objects = release.fetch("urls", []).filter_map do |file|
-          filename = file["filename"] or next
+        provenance_objects = release.fetch("urls").filter_map do |file|
+          filename = file.is_a?(Hash) ? file["filename"] : nil
+          unless filename.is_a?(String) && !filename.empty?
+            raise Ingestion::HTTPClient::InvalidDataError,
+                  "PyPI release file must identify a filename"
+          end
+
           url = "#{API_BASE}/integrity/#{project}/#{version}/#{path_segment(filename)}/provenance"
-          http_client.get_json(url, ttl: 0, accept: INTEGRITY_ACCEPT)
+          http_client.get_json(url, ttl: 0, accept: INTEGRITY_ACCEPT, allow_not_found: true)
         end
         aggregate(provenance_objects)
       end # rubocop:enable Lint/UnusedMethodArgument
@@ -39,10 +47,17 @@ module Ingestion
       end
 
       def aggregate(provenance_objects)
+        return nil if provenance_objects.empty?
+
         identities = provenance_objects.flat_map do |provenance|
-          provenance.fetch("attestation_bundles", []).filter_map { |bundle| bundle_identity(bundle) }
+          bundles = provenance.is_a?(Hash) ? provenance["attestation_bundles"] : nil
+          unless bundles.is_a?(Array) && !bundles.empty?
+            raise Ingestion::HTTPClient::InvalidDataError,
+                  "PyPI provenance response must contain attestation bundles"
+          end
+
+          bundles.map { |bundle| bundle_identity(bundle) }
         end
-        return nil if identities.empty?
 
         chosen = identities.min_by do |identity|
           identity.values_at(:provenance_provider, :source_repository, :workflow_ref,
@@ -52,9 +67,12 @@ module Ingestion
       end
 
       def bundle_identity(bundle)
-        count = bundle.fetch("attestations", []).size
-        publisher = bundle["publisher"]
-        return if count.zero? || !publisher.is_a?(Hash) || publisher["kind"].to_s.empty?
+        attestations = bundle.is_a?(Hash) ? bundle["attestations"] : nil
+        publisher = bundle.is_a?(Hash) ? bundle["publisher"] : nil
+        unless attestations.is_a?(Array) && !attestations.empty? &&
+               publisher.is_a?(Hash) && !publisher["kind"].to_s.empty?
+          raise Ingestion::HTTPClient::InvalidDataError, "PyPI attestation bundle is malformed"
+        end
 
         provider = publisher.fetch("kind").downcase
         repository = publisher["repository"] || joined_repository(publisher)
@@ -69,7 +87,7 @@ module Ingestion
           workflow_ref:,
           commit_sha: claims["sha"] || claims["commit_sha"],
           run_url: publisher["run_url"],
-          attestation_count: count
+          attestation_count: attestations.size
         }
       end
 

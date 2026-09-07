@@ -12,8 +12,8 @@
     "preview": "astro preview",
     "astro": "astro",
     "test": "node --test",
-    "test:coverage": "cd .. && ./site/node_modules/.bin/c8 --all --include='site/src/lib/**/*.ts' --reports-dir=site/coverage --reporter=text --reporter=lcov node --test 'site/test/**/*.test.ts'",
-    "deploy": "wrangler deploy --config dist/server/wrangler.json",
+    "test:coverage": "cd .. && ./site/node_modules/.bin/c8 --all --include='site/src/lib/**/*.ts' --check-coverage --lines=95 --branches=90 --functions=95 --statements=95 --reports-dir=site/coverage --reporter=text --reporter=lcov node --test 'site/test/**/*.test.ts'",
+    "deploy": "WRANGLER_WRITE_LOGS=false wrangler deploy --config dist/server/wrangler.json",
     "deploy:dry": "npm run deploy -- --dry-run",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
