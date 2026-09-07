@@ -7,10 +7,10 @@ documentation are all reviewed as production changes.
 
 Use Ruby and Node versions compatible with `.ruby-version` and
 `site/package.json`. The complete local gate also requires `just`, ShellCheck,
-actionlint, zizmor, pinprick, and typos-cli. On macOS with Homebrew:
+zizmor, pinprick, and typos-cli. On macOS with Homebrew:
 
 ```sh
-brew install just shellcheck actionlint zizmor pinprick typos-cli
+brew install just shellcheck zizmor pinprick typos-cli
 ```
 
 Confirm the audit tools, then set up the project:

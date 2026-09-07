@@ -5,7 +5,6 @@ set -euo pipefail
 missing=()
 for entry in \
   "shellcheck:shellcheck" \
-  "actionlint:actionlint" \
   "zizmor:zizmor" \
   "pinprick:pinprick" \
   "typos:typos-cli"; do

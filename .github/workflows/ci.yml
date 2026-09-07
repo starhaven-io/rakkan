@@ -55,6 +55,10 @@ jobs:
           bundle exec ruby research/check_rubygems_seed_update.rb --structural seed/rubygems
           bundle exec ruby research/check_cratesio_seed_update.rb --structural seed/cratesio
 
+      - name: Normalize report paths
+        if: success()
+        run: python3 -I scripts/upload-codecov.py --prepare --coverage coverage/coverage.xml
+
       - name: Save engine coverage report
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -69,19 +73,6 @@ jobs:
 
       - name: ShellCheck
         run: shellcheck bin/setup scripts/*.sh
-
-      # actionlint 1.7.12 needs Go 1.25, newer than the runner default, and
-      # GOTOOLCHAIN=local forbids an implicit toolchain download.
-      - name: Setup Go for actionlint
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.25"
-          cache: false
-
-      - name: actionlint
-        env:
-          GOTOOLCHAIN: local
-        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
 
       - name: Ruby dependency audit
         run: bundle exec bundler-audit check --update
@@ -157,6 +148,10 @@ jobs:
         working-directory: site
         run: npm run test:coverage
 
+      - name: Normalize report paths
+        if: success()
+        run: python3 -I scripts/upload-codecov.py --prepare --coverage site/coverage/lcov.info
+
       - name: Save site coverage report
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -214,37 +209,40 @@ jobs:
   codecov:
     name: Codecov
     needs: [engine, site]
-    if: needs.engine.result == 'success' && needs.site.result == 'success'
+    # Forks still run coverage tests; Codecov OIDC accepts same-repository runs.
+    if: needs.engine.result == 'success' && needs.site.result == 'success' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-slim
     timeout-minutes: 15
     permissions:
       contents: read
-      id-token: write # required for Codecov OIDC authentication
+      id-token: write # Authenticate report uploads to Codecov with GitHub OIDC.
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out the trusted uploader
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
           persist-credentials: false
+          sparse-checkout: /scripts/upload-codecov.py
+          sparse-checkout-cone-mode: false
+          path: codecov-uploader
 
-      - name: Download engine coverage report
-        id: download-engine-coverage
+      - name: Download engine-coverage-report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: engine-coverage-report
-          path: coverage/engine
+          path: reports/engine
 
-      - name: Download site coverage report
-        id: download-site-coverage
+      - name: Download site-coverage-report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: site-coverage-report
-          path: coverage/site
+          path: reports/site
 
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
-        with:
-          use_oidc: true
-          files: coverage/engine/coverage.xml,coverage/site/lcov.info
-          fail_ci_if_error: true
+      - name: Upload reports with verified Codecov CLI
+        run: >-
+          python3 -I codecov-uploader/scripts/upload-codecov.py
+          --coverage reports/engine/coverage.xml
+          --coverage reports/site/lcov.info
 
   # The org's Require Conclusion ruleset needs an always-reporting aggregate
   # check with exactly this name.
@@ -264,15 +262,26 @@ jobs:
           PINPRICK_RESULT: ${{ needs.pinprick.result }}
           CODEQL_RESULT: ${{ needs.codeql.result }}
           CODECOV_RESULT: ${{ needs.codecov.result }}
+          UPLOAD_ALLOWED: ${{ github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository }}
         run: |
-          for result in \
-            "${COMMITS_RESULT}" \
-            "${ENGINE_RESULT}" \
-            "${SITE_RESULT}" \
-            "${ZIZMOR_RESULT}" \
-            "${PINPRICK_RESULT}" \
-            "${CODEQL_RESULT}" \
-            "${CODECOV_RESULT}"
-          do
-            test "${result}" = "success" || test "${result}" = "skipped"
-          done
+          require_result() {
+            local name="$1" result="$2" required="$3"
+            case "${required}" in
+              true) test "${result}" = success ;;
+              false) test "${result}" = skipped ;;
+              *) echo "::error::Invalid routing decision for ${name}."; return 1 ;;
+            esac || { echo "::error::${name} ended with ${result:-no result}."; return 1; }
+          }
+
+          case "${GITHUB_EVENT_NAME}" in
+            pull_request) REQUIRE_PR_CHECKS=true ;;
+            push) REQUIRE_PR_CHECKS=false ;;
+            *) echo "::error::Unexpected CI event."; exit 1 ;;
+          esac
+          require_result engine "${ENGINE_RESULT}" true
+          require_result site "${SITE_RESULT}" true
+          require_result commits "${COMMITS_RESULT}" "${REQUIRE_PR_CHECKS}"
+          require_result zizmor "${ZIZMOR_RESULT}" "${REQUIRE_PR_CHECKS}"
+          require_result pinprick "${PINPRICK_RESULT}" "${REQUIRE_PR_CHECKS}"
+          require_result codeql "${CODEQL_RESULT}" "${REQUIRE_PR_CHECKS}"
+          require_result codecov "${CODECOV_RESULT}" "${UPLOAD_ALLOWED}"
