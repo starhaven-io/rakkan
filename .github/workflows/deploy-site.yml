@@ -5,6 +5,8 @@ on:
     branches:
       - main
     paths:
+      - ".github/workflows/deploy-site.yml"
+      - "scripts/check-npm-install-policy.mjs"
       - "site/**"
   workflow_dispatch:
 
@@ -15,20 +17,93 @@ defaults:
     shell: bash -euo pipefail {0}
 
 concurrency:
-  group: deploy-site
-  cancel-in-progress: true
+  # Hold the production lock from the remote schema read through deployment,
+  # so the compatibility decision cannot race a D1 replacement or rollback.
+  # Rejected non-main dispatches get a unique group and cannot evict pending
+  # production work before their job-level source guard skips them.
+  group: ${{ github.ref == 'refs/heads/main' && 'd1-production-write' || format('rejected-deploy-{0}', github.run_id) }}
+  cancel-in-progress: false
+  queue: max
 
 jobs:
+  schema:
+    name: Verify D1 schema contract
+    if: github.repository == 'starhaven-io/rakkan' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    environment:
+      name: cloudflare-d1-read
+      deployment: false
+    outputs:
+      legacy_export: ${{ steps.contract.outputs.legacy_export }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Check npm install-script policy
+        run: node scripts/check-npm-install-policy.mjs site
+
+      - name: Install Wrangler
+        working-directory: site
+        run: npm ci --strict-allow-scripts
+
+      - name: Verify deployed schema compatibility
+        id: contract
+        working-directory: site
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_READ_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          compatible="$(jq -cer '.compatibleVersions | select(type == "array" and length > 0)' schema-contract.json)"
+          columns="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='PRAGMA table_info(export_meta)')"
+          names="$(jq -cer '[.[0].results[].name] | sort' <<< "${columns}")"
+          result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='SELECT * FROM export_meta LIMIT 2')"
+          row="$(jq -cer '.[0].results | select(length == 1) | .[0] |
+            select(.generated_at | type == "string" and
+              test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?$"))' \
+            <<< "${result}")"
+          if [[ "${names}" == '["generated_at"]' ]]; then
+            actual=1
+            legacy_export=true
+          elif [[ "${names}" == '["generated_at","schema_version"]' ]]; then
+            actual="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
+              <<< "${row}")"
+            legacy_export=false
+          else
+            echo "::error::production D1 has an unknown export_meta shape: ${names}"
+            exit 1
+          fi
+          if ! jq -e --argjson actual "${actual}" 'index($actual) != null' <<< "${compatible}" >/dev/null; then
+            echo "::error::production D1 schema ${actual} is not in the site compatibility set ${compatible}"
+            exit 1
+          fi
+          echo "legacy_export=${legacy_export}" >> "${GITHUB_OUTPUT}"
+
   deploy:
     name: Deploy
+    if: github.repository == 'starhaven-io/rakkan' && github.ref == 'refs/heads/main'
+    needs: schema
     runs-on: ubuntu-slim
     timeout-minutes: 60
     permissions:
       contents: read # required to checkout repository
-    environment: cloudflare
+    environment: cloudflare-worker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -44,6 +119,28 @@ jobs:
         # Fail if an unreviewed dependency install script is introduced.
         run: npm ci --strict-allow-scripts
 
+      - name: Reverify production schema compatibility
+        env:
+          LEGACY_EXPORT: ${{ needs.schema.outputs.legacy_export }}
+        run: |
+          health_file="${RUNNER_TEMP}/predeploy-health.json"
+          status="$(curl --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
+            --output "${health_file}" --write-out '%{http_code}' https://rakkan.dev/health/v1.json)"
+          if [[ "${status}" == "404" && "${LEGACY_EXPORT}" == "true" ]]; then
+            echo "Legacy schema 1 and the pre-health Worker were verified; proceeding with the bridge deployment." \
+              >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+          if [[ "${status}" != "200" ]]; then
+            echo "::error::production health check returned HTTP ${status}"
+            exit 1
+          fi
+          jq -e --argjson compatible "$(jq -cer .compatibleVersions site/schema-contract.json)" '
+            . as $health |
+            $health.status == "ok" and
+            ($compatible | index($health.schemaVersion)) != null
+          ' "${health_file}" >/dev/null
+
       - name: Build site
         working-directory: site
         run: npm run build
@@ -52,6 +149,18 @@ jobs:
         working-directory: site
         run: npm run deploy
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_WORKER_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
+
+      - name: Verify deployed site
+        run: |
+          health="$(curl --fail --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
+            https://rakkan.dev/health/v1.json)"
+          jq -e --argjson compatible "$(jq -cer .compatibleVersions site/schema-contract.json)" '
+            . as $health |
+            .status == "ok" and
+            .compatibleVersions == $compatible and
+            ($compatible | index($health.schemaVersion)) != null and
+            (.generatedAt | type == "string" and length > 0)
+          ' <<< "${health}" >/dev/null

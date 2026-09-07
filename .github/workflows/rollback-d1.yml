@@ -1,0 +1,189 @@
+name: Roll back D1
+
+on:
+  workflow_dispatch:
+    inputs:
+      refresh_run_id:
+        description: Refresh Data run whose pre-refresh state must be restored
+        required: true
+        type: string
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+jobs:
+  rollback:
+    name: Restore pre-refresh D1 state
+    if: github.repository == 'starhaven-io/rakkan' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    concurrency:
+      group: d1-production-write
+      cancel-in-progress: false
+      queue: max
+    environment: cloudflare-d1
+    permissions:
+      actions: read # required to inspect a source run and download its artifact
+      contents: read # required to checkout trusted workflow support files
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+
+      - name: Validate source refresh run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          SOURCE_RUN_ID: ${{ inputs.refresh_run_id }}
+        run: |
+          if ! [[ "${SOURCE_RUN_ID}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::refresh_run_id must be a positive integer"
+            exit 1
+          fi
+          source_run="$(gh api "repos/${REPOSITORY}/actions/runs/${SOURCE_RUN_ID}")"
+          jq -e '
+            .name == "Refresh Data" and
+            .path == ".github/workflows/refresh-data.yml" and
+            .head_branch == "main" and
+            .status == "completed" and
+            (
+              .conclusion == "success" or
+              .conclusion == "failure" or
+              .conclusion == "cancelled" or
+              .conclusion == "timed_out"
+            )
+          ' <<< "${source_run}" >/dev/null
+
+      - name: Download pre-refresh recovery artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rakkan-d1-backup-${{ inputs.refresh_run_id }}
+          path: ${{ runner.temp }}/backup
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.refresh_run_id }}
+
+      - name: Validate recovery artifact
+        id: recovery
+        env:
+          BACKUP_DIR: ${{ runner.temp }}/backup
+        run: |
+          bookmark_file="${BACKUP_DIR}/rakkan-d1-bookmark.txt"
+          sql_file="${BACKUP_DIR}/rakkan-d1-backup.sql"
+          manifest_file="${BACKUP_DIR}/rakkan-d1-recovery.json"
+          test -f "${bookmark_file}" && test ! -L "${bookmark_file}"
+          test -f "${sql_file}" && test ! -L "${sql_file}"
+          test -f "${manifest_file}" && test ! -L "${manifest_file}"
+
+          recovery="$(ruby scripts/verify_d1_recovery_manifest.rb \
+            "${manifest_file}" "${sql_file}")"
+          bookmark="$(jq -er .bookmark <<< "${recovery}")"
+          if [[ "$(tr -d '\r\n' < "${bookmark_file}")" != "${bookmark}" ]]; then
+            echo "::error::bookmark evidence does not match the recovery manifest"
+            exit 1
+          fi
+
+          {
+            echo "bookmark=${bookmark}"
+            echo "schema_version=$(jq -er .schema_version <<< "${recovery}")"
+            echo "generated_at=$(jq -er .generated_at <<< "${recovery}")"
+            echo "registries=$(jq -er .counts.registries <<< "${recovery}")"
+            echo "packages=$(jq -er .counts.packages <<< "${recovery}")"
+            echo "package_versions=$(jq -er .counts.package_versions <<< "${recovery}")"
+            echo "adoption_snapshots=$(jq -er .counts.adoption_snapshots <<< "${recovery}")"
+          } >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Check npm install-script policy
+        run: node scripts/check-npm-install-policy.mjs site
+
+      - name: Install Wrangler
+        working-directory: site
+        run: npm ci --strict-allow-scripts
+
+      - name: Verify deployed Worker accepts rollback schema
+        env:
+          EXPECTED_SCHEMA: ${{ steps.recovery.outputs.schema_version }}
+        run: |
+          compatibility="$(curl --fail --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
+            https://rakkan.dev/health/compatibility/v1.json)"
+          jq -e --argjson expected_schema "${EXPECTED_SCHEMA}" '
+            .status == "ok" and
+            (.compatibleVersions | type == "array" and length > 0) and
+            (.compatibleVersions | index($expected_schema) != null)
+          ' <<< "${compatibility}" >/dev/null
+
+      - name: Restore and verify production D1
+        working-directory: site
+        env:
+          BOOKMARK: ${{ steps.recovery.outputs.bookmark }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          EXPECTED_REGISTRIES: ${{ steps.recovery.outputs.registries }}
+          EXPECTED_PACKAGES: ${{ steps.recovery.outputs.packages }}
+          EXPECTED_VERSIONS: ${{ steps.recovery.outputs.package_versions }}
+          EXPECTED_SNAPSHOTS: ${{ steps.recovery.outputs.adoption_snapshots }}
+          EXPECTED_SCHEMA: ${{ steps.recovery.outputs.schema_version }}
+          EXPECTED_GENERATED_AT: ${{ steps.recovery.outputs.generated_at }}
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          restore="$(./node_modules/.bin/wrangler d1 time-travel restore rakkan \
+            --bookmark="${BOOKMARK}" --json)"
+          previous_bookmark="$(jq -er '.previous_bookmark | select(type == "string" and length > 0)' \
+            <<< "${restore}")"
+          columns="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='PRAGMA table_info(export_meta)')"
+          column_names="$(jq -cer '[.[0].results[].name] | sort' <<< "${columns}")"
+          if [[ "${column_names}" == '["generated_at"]' ]]; then
+            actual_schema=1
+          elif [[ "${column_names}" == '["generated_at","schema_version"]' ]]; then
+            schema_result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+              --command='SELECT schema_version FROM export_meta LIMIT 1')"
+            actual_schema="$(jq -er '.[0].results[0].schema_version |
+              select(type == "number" and floor == . and . > 0)' <<< "${schema_result}")"
+          else
+            echo "::error::restored D1 has an unknown export_meta shape: ${column_names}"
+            exit 1
+          fi
+          result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
+            SELECT
+              (SELECT generated_at FROM export_meta LIMIT 1) AS generated_at,
+              (SELECT COUNT(*) FROM registries) AS registries,
+              (SELECT COUNT(*) FROM packages) AS packages,
+              (SELECT COUNT(*) FROM package_versions) AS package_versions,
+              (SELECT COUNT(*) FROM adoption_snapshots) AS adoption_snapshots
+          ')"
+          jq -e \
+            --argjson expected_schema "${EXPECTED_SCHEMA}" \
+            --argjson expected_registries "${EXPECTED_REGISTRIES}" \
+            --argjson expected_packages "${EXPECTED_PACKAGES}" \
+            --argjson expected_versions "${EXPECTED_VERSIONS}" \
+            --argjson expected_snapshots "${EXPECTED_SNAPSHOTS}" \
+            --argjson actual_schema "${actual_schema}" \
+            --arg expected_generated_at "${EXPECTED_GENERATED_AT}" '
+            .[0].results[0] |
+            $expected_schema == $actual_schema and
+            .generated_at == $expected_generated_at and
+            .registries == $expected_registries and
+            .packages == $expected_packages and
+            .package_versions == $expected_versions and
+            .adoption_snapshots == $expected_snapshots
+          ' <<< "${result}" >/dev/null
+          {
+            echo "## D1 rollback verified"
+            echo
+            echo "Restored bookmark: \`${BOOKMARK}\`"
+            echo
+            echo "Undo bookmark: \`${previous_bookmark}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"

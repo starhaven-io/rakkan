@@ -1,8 +1,9 @@
 ---
 import '../styles/site.css';
 import { getDb } from '../lib/db.ts';
-import { exportGeneratedAt } from '../lib/d1.ts';
+import { exportGeneratedAt, SchemaVersionError } from '../lib/d1.ts';
 import { utcStamp } from '../lib/format.ts';
+import { pageHref } from '../lib/pagination.ts';
 import { registrySite, type RegistrySlug } from '../lib/registries.ts';
 
 interface Props {
@@ -10,6 +11,10 @@ interface Props {
   query?: string;
   freshness?: boolean;
   registry?: RegistrySlug;
+  description?: string;
+  noindex?: boolean;
+  canonicalPath: string;
+  canonicalPage?: number;
 }
 
 const {
@@ -17,8 +22,14 @@ const {
   query = '',
   freshness = true,
   registry = 'rubygems',
+  description = 'Trusted publishing adoption and verifiable provenance across public package registries.',
+  noindex = false,
+  canonicalPath,
+  canonicalPage,
 } = Astro.props;
 const registryPaths = registrySite(registry);
+const canonicalPagePath = canonicalPage === undefined ? canonicalPath : pageHref(canonicalPath, canonicalPage);
+const canonicalUrl = new URL(canonicalPagePath, Astro.site ?? Astro.url.origin).toString();
 
 // Export-generation note in the header. It intentionally describes the whole
 // D1 artifact rather than claiming that the registry displayed on a page was
@@ -29,7 +40,8 @@ let exportedAt: string | null = null;
 if (freshness) {
   try {
     exportedAt = utcStamp(await exportGeneratedAt(getDb()));
-  } catch {
+  } catch (error) {
+    if (error instanceof SchemaVersionError) throw error;
     exportedAt = null;
   }
 }
@@ -44,6 +56,15 @@ const favicon =
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#faf7f2" />
+    <meta name="description" content={description} />
+    {noindex && <meta name="robots" content="noindex,follow" />}
+    <link rel="canonical" href={canonicalUrl} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="rakkan" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta name="twitter:card" content="summary" />
     <title>{title}</title>
     <link rel="icon" href={favicon} />
   </head>

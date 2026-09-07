@@ -26,14 +26,25 @@ module Ingestion
         module_function
 
         # bundles: array of parsed sigstore bundle hashes from the
-        # attestations API / dump body. Returns a provenance column hash, or
-        # nil when no bundle yields a certificate. Every bundle is parsed so
-        # a malformed first bundle cannot hide a valid later one; when
+        # attestations API / dump body. Returns nil only for an empty array;
+        # any non-empty malformed bundle fails closed. Every bundle is parsed
+        # so a malformed first bundle cannot hide a valid later one; when
         # parseable bundles disagree, the lexicographically smallest identity
         # wins: arbitrary but deterministic, independent of bundle order.
         def parse(bundles)
-          identities = bundles.filter_map { |bundle| parse_bundle(bundle) }
-          return nil if identities.empty?
+          unless bundles.is_a?(Array)
+            raise Ingestion::HTTPClient::InvalidDataError,
+                  "RubyGems attestation bundles must be an array"
+          end
+          return nil if bundles.empty?
+
+          identities = bundles.map do |bundle|
+            parse_bundle(bundle) ||
+              raise(
+                Ingestion::HTTPClient::InvalidDataError,
+                "RubyGems attestation bundle has no parseable certificate"
+              )
+          end
 
           chosen = identities.min_by do |identity|
             identity.values_at(:source_repository, :commit_sha, :workflow_ref, :run_url).map(&:to_s)
@@ -42,10 +53,12 @@ module Ingestion
         end
 
         def parse_bundle(bundle)
-          raw = bundle.dig("verificationMaterial", "certificate", "rawBytes")
-          return nil unless raw
+          return nil unless bundle.is_a?(Hash)
 
-          cert = OpenSSL::X509::Certificate.new(Base64.decode64(raw))
+          raw = bundle.dig("verificationMaterial", "certificate", "rawBytes")
+          return nil unless raw.is_a?(String) && !raw.empty?
+
+          cert = OpenSSL::X509::Certificate.new(Base64.strict_decode64(raw))
           exts = cert.extensions.to_h { |e| [e.oid, e] }
 
           issuer = ext_value(exts[OID_ISSUER]) || ext_value(exts[OID_ISSUER_LEGACY])
@@ -57,7 +70,7 @@ module Ingestion
             commit_sha: ext_value(exts[OID_SOURCE_SHA]),
             run_url: ext_value(exts[OID_RUN_URL])
           }
-        rescue OpenSSL::X509::CertificateError
+        rescue ArgumentError, OpenSSL::X509::CertificateError
           nil
         end
 

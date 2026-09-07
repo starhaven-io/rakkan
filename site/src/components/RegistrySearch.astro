@@ -17,7 +17,14 @@ const registry = await registryByName(db, slug);
 const results = query && registry ? await searchPackages(db, registry.id, query) : [];
 ---
 
-<Base registry={slug} title={`Search ${registry?.display_name ?? ''} · rakkan`} query={query}>
+<Base
+  registry={slug}
+  canonicalPath={site.searchPath}
+  title={`Search ${registry?.display_name ?? ''} · rakkan`}
+  query={query}
+  description={`Search tracked packages on ${registry?.display_name ?? 'the selected registry'}.`}
+  noindex={true}
+>
   <header class="page-heading">
     <h1>Search</h1>
     <p>
@@ -29,12 +36,12 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
   {
     !query ? (
       <section class="empty-state compact">
-        <h3>Search by package name</h3>
+        <h2>Search by package name</h2>
         <p>Use the search field above.</p>
       </section>
     ) : results.length === 0 ? (
       <section class="empty-state compact">
-        <h3>No tracked packages found</h3>
+        <h2>No tracked packages found</h2>
         <p>
           Nothing in {registry?.display_name ?? 'the active registry'} matches <code>{query}</code>.
         </p>
@@ -43,14 +50,15 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
       <section class="panel">
         <header class="panel-header">
           <div>
-            <h3>
+            <h2>
               Results for <code>{query}</code>
-            </h3>
+            </h2>
             <p>{searchResultSummary(registry?.name, registry?.display_name, results.length)}</p>
           </div>
         </header>
         <div class="table-wrap">
           <table>
+            <caption class="visually-hidden">Package search results for {query}</caption>
             <thead>
               <tr>
                 <th>Package</th>

@@ -58,22 +58,36 @@ RSpec.describe "ingestion rake tasks" do
 
   it "keeps the refresh limit first and defaults its registry to RubyGems" do
     operation = instance_double(Ingestion::Operations::RefreshProvenance)
-    payload = { checked: 3, provenant: 1, settled: 0, remaining: 4 }
+    payload = { checked: 3, provenant: 1, settled: 0, waived: 0, errors: 0, remaining: 4 }
     result = Dry::Monads::Result::Success.new(payload)
     allow(Ingestion::Slice).to receive(:[]).with("operations.refresh_provenance").and_return(operation)
     expect(operation).to receive(:call)
-      .with(limit: 73, adapter: an_instance_of(Ingestion::Adapters::Rubygems))
+      .with(
+        limit: 73, adapter: an_instance_of(Ingestion::Adapters::Rubygems),
+        waiver_date: Date.new(2026, 9, 7)
+      )
       .and_return(result)
 
-    expect { invoke_task("ingest:refresh", "73") }.to output("#{JSON.generate(payload)}\n").to_stdout
+    expect { invoke_task("ingest:refresh", "73", nil, "2026-09-07") }
+      .to output("#{JSON.generate(payload)}\n").to_stdout
   end
 
   it "defaults snapshots to RubyGems" do
+    adapter = instance_double(
+      Ingestion::Adapters::Rubygems,
+      registry_slug: "rubygems"
+    )
     operation = instance_double(Ingestion::Operations::TakeSnapshot)
+    allow(Ingestion::Slice).to receive(:[]).with("adapters.rubygems").and_return(adapter)
     allow(Ingestion::Slice).to receive(:[]).with("operations.take_snapshot").and_return(operation)
-    expect(operation).to receive(:call).with(registry_name: "rubygems").and_return(:recorded)
+    expect(operation).to receive(:call)
+      .with(
+        registry_name: "rubygems", taken_on: Date.new(2026, 9, 7),
+        waiver_date: Date.new(2026, 9, 7)
+      )
+      .and_return(:recorded)
 
-    expect { invoke_task("snapshot:take") }.to output(":recorded\n").to_stdout
+    expect { invoke_task("snapshot:take", nil, "2026-09-07") }.to output(":recorded\n").to_stdout
   end
 
   it "passes an explicit registry adapter to seed" do
@@ -88,38 +102,54 @@ RSpec.describe "ingestion rake tasks" do
 
   it "passes an explicit registry after the refresh limit" do
     operation = instance_double(Ingestion::Operations::RefreshProvenance)
-    payload = { checked: 12, provenant: 2, settled: 30, remaining: 9 }
+    payload = { checked: 12, provenant: 2, settled: 30, waived: 0, errors: 0, remaining: 9 }
     result = Dry::Monads::Result::Success.new(payload)
     allow(Ingestion::Slice).to receive(:[]).with("operations.refresh_provenance").and_return(operation)
     expect(operation).to receive(:call)
-      .with(limit: 12, adapter: an_instance_of(Ingestion::Adapters::Cratesio))
+      .with(
+        limit: 12, adapter: an_instance_of(Ingestion::Adapters::Cratesio),
+        waiver_date: Date.new(2026, 9, 7)
+      )
       .and_return(result)
 
-    expect { invoke_task("ingest:refresh", "12", "cratesio") }.to output("#{JSON.generate(payload)}\n").to_stdout
+    expect { invoke_task("ingest:refresh", "12", "cratesio", "2026-09-07") }
+      .to output("#{JSON.generate(payload)}\n").to_stdout
   end
 
   it "resolves an explicit snapshot registry through its adapter" do
     operation = instance_double(Ingestion::Operations::TakeSnapshot)
     allow(Ingestion::Slice).to receive(:[]).with("operations.take_snapshot").and_return(operation)
-    expect(operation).to receive(:call).with(registry_name: "pypi").and_return(:recorded)
+    expect(operation).to receive(:call)
+      .with(
+        registry_name: "pypi", taken_on: Date.new(2026, 9, 7),
+        waiver_date: Date.new(2026, 9, 7)
+      )
+      .and_return(:recorded)
 
-    expect { invoke_task("snapshot:take", "pypi") }.to output(":recorded\n").to_stdout
+    expect { invoke_task("snapshot:take", "pypi", "2026-09-07") }.to output(":recorded\n").to_stdout
   end
 
-  it "dates a crates.io snapshot to its seed observation" do
+  it "lets the snapshot operation date crates.io by the current UTC day" do
     adapter = instance_double(
       Ingestion::Adapters::Cratesio,
-      registry_slug: "cratesio",
-      snapshot_taken_on: Date.new(2026, 8, 21)
+      registry_slug: "cratesio"
     )
     operation = instance_double(Ingestion::Operations::TakeSnapshot)
     allow(Ingestion::Slice).to receive(:[]).with("adapters.cratesio").and_return(adapter)
     allow(Ingestion::Slice).to receive(:[]).with("operations.take_snapshot").and_return(operation)
     expect(operation).to receive(:call)
-      .with(registry_name: "cratesio", taken_on: Date.new(2026, 8, 21))
+      .with(
+        registry_name: "cratesio", taken_on: Date.new(2026, 9, 7),
+        waiver_date: Date.new(2026, 9, 7)
+      )
       .and_return(:recorded)
 
-    expect { invoke_task("snapshot:take", "cratesio") }.to output(":recorded\n").to_stdout
+    expect { invoke_task("snapshot:take", "cratesio", "2026-09-07") }.to output(":recorded\n").to_stdout
+  end
+
+  it "rejects a noncanonical shared run date" do
+    expect { invoke_task("snapshot:take", "rubygems", "2026-9-7") }
+      .to raise_error(ArgumentError, 'invalid UTC run date "2026-9-7"; expected YYYY-MM-DD')
   end
 
   {

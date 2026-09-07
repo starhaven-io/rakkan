@@ -20,20 +20,25 @@ module FixtureHelpers
   # A stand-in for Ingestion::HTTPClient backed by canned responses.
   # Records every requested URL for assertions.
   class FakeHTTPClient
-    attr_reader :accepts, :requests, :ttls
+    attr_reader :accepts, :allow_not_founds, :requests, :ttls
 
     def initialize(responses = {})
       @responses = responses
       @accepts = []
+      @allow_not_founds = []
       @requests = []
       @ttls = []
     end
 
-    def get_json(url, ttl: nil, accept: "application/json")
+    def get_json(url, ttl: nil, accept: "application/json", allow_not_found: false)
       @accepts << accept
+      @allow_not_founds << allow_not_found
       @requests << url
       @ttls << ttl
-      @responses.fetch(url) { raise "unexpected request in specs: #{url}" }
+      response = @responses.fetch(url) { raise "unexpected request in specs: #{url}" }
+      raise Ingestion::HTTPClient::NotFoundError, "GET #{url} returned 404" if response.nil? && !allow_not_found
+
+      response
     end
   end
 end

@@ -4,7 +4,7 @@
 # inputs. The dump provides package/version state but no trusted-publishing
 # metadata, so this builder deliberately emits no provenance observations.
 #
-# Usage: ruby research/build_cratesio_seed.rb <dump-dir> <seed-dir> [<limit>]
+# Usage: ruby research/build_cratesio_seed.rb <dump-dir> <seed-dir> <archive-sha256> [<limit>]
 #
 # <dump-dir> is the dated directory at the root of db-dump.tar.gz. It must
 # contain metadata.json and data/{crate_downloads,crates,default_versions,versions}.csv.
@@ -19,10 +19,12 @@ module CratesioSeedBuilder
 
   SOURCE_URL = "https://static.crates.io/db-dump.tar.gz"
   TRUTHY = %w[1 t true].freeze
+  FALSEY = %w[0 f false].freeze
 
-  def build(dump_dir:, seed_dir:, limit: 1_000)
+  def build(dump_dir:, seed_dir:, archive_sha256:, limit: 1_000)
     limit = Integer(limit)
     raise ArgumentError, "limit must be positive" unless limit.positive?
+    raise ArgumentError, "invalid archive SHA-256" unless archive_sha256.to_s.match?(/\A[0-9a-f]{64}\z/)
 
     data_dir = File.join(dump_dir, "data")
     metadata = JSON.parse(File.read(File.join(dump_dir, "metadata.json"), encoding: "UTF-8"))
@@ -34,7 +36,7 @@ module CratesioSeedBuilder
     )
 
     FileUtils.mkdir_p(seed_dir)
-    write_manifest(seed_dir, metadata, limit)
+    write_manifest(seed_dir, metadata, limit, archive_sha256)
     write_tracked_packages(seed_dir, tracked)
     versions = write_versions(
       seed_dir,
@@ -47,32 +49,57 @@ module CratesioSeedBuilder
   end
 
   def downloads_by_crate(path)
-    CSV.foreach(path, headers: true, encoding: "UTF-8").to_h do |row|
-      [row.fetch("crate_id"), Integer(row.fetch("downloads"))]
+    CSV.foreach(path, headers: true, encoding: "UTF-8").each_with_object({}) do |row, downloads|
+      crate_id = row.fetch("crate_id")
+      raise ArgumentError, "duplicate download total for crate #{crate_id}" if downloads.key?(crate_id)
+
+      count = Integer(row.fetch("downloads"), 10)
+      raise ArgumentError, "crate download totals must be non-negative" if count.negative?
+
+      downloads[crate_id] = count
     end
   end
 
   def top_crates(path, downloads, limit)
+    ids = {}
+    names = {}
     crates = CSV.foreach(path, headers: true, encoding: "UTF-8").filter_map do |row|
-      crate_downloads = downloads[row.fetch("id")]
+      id = row.fetch("id")
+      name = row.fetch("name")
+      raise ArgumentError, "crate identifiers and names must not be empty" if id.empty? || name.empty?
+      raise ArgumentError, "duplicate crate id #{id}" if ids[id]
+      raise ArgumentError, "duplicate crate name #{name}" if names[name]
+
+      ids[id] = true
+      names[name] = true
+      crate_downloads = downloads[id]
       next unless crate_downloads
 
-      { "id" => row.fetch("id"), "name" => row.fetch("name"), "downloads" => crate_downloads }
+      { "id" => id, "name" => name, "downloads" => crate_downloads }
     end
-    crates.sort_by { |crate| [-crate.fetch("downloads"), crate.fetch("name")] }.first(limit)
+    tracked = crates.sort_by { |crate| [-crate.fetch("downloads"), crate.fetch("name")] }.first(limit)
+    if tracked.length < limit
+      raise ArgumentError, "dump contains only #{tracked.length} ranked crates; expected #{limit}"
+    end
+
+    tracked
   end
 
   def default_versions_by_crate(path, tracked_ids)
-    CSV.foreach(path, headers: true, encoding: "UTF-8").filter_map do |row|
+    CSV.foreach(path, headers: true, encoding: "UTF-8").each_with_object({}) do |row, versions|
       crate_id = row.fetch("crate_id")
-      [crate_id, row.fetch("version_id")] if tracked_ids[crate_id]
-    end.to_h
+      next unless tracked_ids[crate_id]
+      raise ArgumentError, "duplicate default version for crate #{crate_id}" if versions.key?(crate_id)
+
+      versions[crate_id] = row.fetch("version_id")
+    end
   end
 
-  def write_manifest(seed_dir, metadata, limit)
+  def write_manifest(seed_dir, metadata, limit, archive_sha256)
     manifest = {
       source: "crates.io daily database dump",
       source_url: SOURCE_URL,
+      archive_sha256: archive_sha256,
       dump_taken_at: metadata.fetch("timestamp"),
       source_commit: metadata.fetch("crates_io_commit"),
       built_by: "research/build_cratesio_seed.rb",
@@ -108,7 +135,7 @@ module CratesioSeedBuilder
           row.fetch("created_at"),
           prerelease?(version),
           row.fetch("id") == default_versions[crate_id],
-          truthy?(row.fetch("yanked"))
+          parse_boolean(row.fetch("yanked"), "yanked")
         ].join("\t")
         count += 1
       end
@@ -120,15 +147,21 @@ module CratesioSeedBuilder
     version.split("+", 2).first.include?("-")
   end
 
-  def truthy?(value)
-    TRUTHY.include?(value.downcase)
+  def parse_boolean(value, field)
+    normalized = value.to_s.downcase
+    return true if TRUTHY.include?(normalized)
+    return false if FALSEY.include?(normalized)
+
+    raise ArgumentError, "#{field} must be a recognized boolean"
   end
 end
 
 if $PROGRAM_NAME == __FILE__
-  dump_dir, seed_dir, limit = ARGV
-  abort "usage: build_cratesio_seed.rb <dump-dir> <seed-dir> [<limit>]" unless dump_dir && seed_dir
+  dump_dir, seed_dir, archive_sha256, limit = ARGV
+  unless dump_dir && seed_dir && archive_sha256
+    abort "usage: build_cratesio_seed.rb <dump-dir> <seed-dir> <archive-sha256> [<limit>]"
+  end
 
-  result = CratesioSeedBuilder.build(dump_dir:, seed_dir:, limit: limit || 1_000)
+  result = CratesioSeedBuilder.build(dump_dir:, seed_dir:, archive_sha256:, limit: limit || 1_000)
   puts "tracked packages: #{result.fetch(:packages)}, tracked versions: #{result.fetch(:versions)}"
 end

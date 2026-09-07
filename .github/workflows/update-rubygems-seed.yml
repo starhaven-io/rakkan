@@ -1,0 +1,369 @@
+name: Update RubyGems seed
+
+on:
+  workflow_dispatch:
+  schedule:
+    # RubyGems normally publishes the weekly dump around 21:21 UTC on Monday.
+    - cron: "30 23 * * 1"
+    # Retry after a delayed dump without failing when Monday already succeeded.
+    - cron: "30 03 * * 2"
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -euo pipefail {0}
+
+concurrency:
+  group: update-rubygems-seed
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Generate seed update
+    if: github.repository == 'starhaven-io/rakkan' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read # required to compare a candidate with the existing automation PR
+    outputs:
+      base_sha: ${{ github.sha }}
+      dump_key: ${{ steps.seed.outputs.dump_key }}
+      dump_taken_at: ${{ steps.seed.outputs.dump_taken_at }}
+      update_required: ${{ steps.proposal.outputs.update_required }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Set temporary paths
+        run: |
+          {
+            echo "ARCHIVE=${RUNNER_TEMP}/public_postgresql.tar"
+            echo "DUMP_DIR=${RUNNER_TEMP}/rubygems-dump"
+            echo "EXTRACTED_DIR=${RUNNER_TEMP}/rubygems-extracted"
+            echo "GENERATED_SEED=${RUNNER_TEMP}/rubygems-seed"
+          } >> "${GITHUB_ENV}"
+
+      - name: Download latest weekly dump
+        id: download
+        run: |
+          result="$(bundle exec ruby research/download_rubygems_dump.rb "${ARCHIVE}")"
+          bytes="$(jq -er '.bytes | select(type == "number" and . > 0)' <<< "${result}")"
+          dump_key="$(jq -er '.dump_key | select(type == "string")' <<< "${result}")"
+          archive_sha256="$(jq -er '.archive_sha256 | select(test("^[0-9a-f]{64}$"))' <<< "${result}")"
+          test "$(stat --format=%s "${ARCHIVE}")" -eq "${bytes}"
+          {
+            echo "archive_sha256=${archive_sha256}"
+            echo "bytes=${bytes}"
+            echo "dump_key=${dump_key}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Extract PostgreSQL stream
+        run: |
+          mkdir -p "${DUMP_DIR}"
+          entries="$(tar --list --file="${ARCHIVE}")"
+          expected=$'public_postgresql/\npublic_postgresql/databases/\npublic_postgresql/databases/PostgreSQL.sql.gz'
+          if [[ "${entries}" != "${expected}" ]]; then
+            echo "::error::RubyGems archive contained unexpected entries"
+            exit 1
+          fi
+          tar --extract --file="${ARCHIVE}" --directory="${DUMP_DIR}" --no-same-owner --no-same-permissions
+          if [[ ! -f "${DUMP_DIR}/public_postgresql/databases/PostgreSQL.sql.gz" ||
+                -L "${DUMP_DIR}/public_postgresql/databases/PostgreSQL.sql.gz" ]]; then
+            echo "::error::RubyGems archive payload is not a regular file"
+            exit 1
+          fi
+          gzip --test "${DUMP_DIR}/public_postgresql/databases/PostgreSQL.sql.gz"
+
+      - name: Build deterministic seed candidate
+        env:
+          ARCHIVE_SHA256: ${{ steps.download.outputs.archive_sha256 }}
+          DUMP_KEY: ${{ steps.download.outputs.dump_key }}
+        run: |
+          sql_gz="${DUMP_DIR}/public_postgresql/databases/PostgreSQL.sql.gz"
+          mkdir -p "${EXTRACTED_DIR}"
+          bundle exec ruby research/extract_dump.rb "${sql_gz}" "${EXTRACTED_DIR}" \
+            rubygems gem_downloads attestations
+          bundle exec ruby research/top_gems.rb "${EXTRACTED_DIR}" 1000 "${EXTRACTED_DIR}/top_1000.tsv"
+          bundle exec ruby research/filter_versions.rb \
+            "${sql_gz}" "${EXTRACTED_DIR}/top_1000.tsv" "${EXTRACTED_DIR}/tracked_versions.tsv"
+          bundle exec ruby research/build_seed.rb \
+            "${EXTRACTED_DIR}" "${GENERATED_SEED}" \
+            "${DUMP_KEY}" "${ARCHIVE_SHA256}"
+
+      - name: Evaluate seed update
+        id: seed
+        env:
+          ARCHIVE_BYTES: ${{ steps.download.outputs.bytes }}
+        run: |
+          result="$(bundle exec ruby research/check_rubygems_seed_update.rb seed/rubygems "${GENERATED_SEED}")"
+          update_required="$(jq -er '.update_required | if . then "true" else "false" end' <<< "${result}")"
+          content_changed="$(jq -er '.content_changed | if . then "true" else "false" end' <<< "${result}")"
+          dump_taken_at="$(jq -er '.dump_taken_at | select(type == "string")' <<< "${result}")"
+          dump_key="$(jq -er '.dump_key | select(type == "string")' <<< "${result}")"
+          packages="$(jq -er '.packages | select(. == 1000)' <<< "${result}")"
+          versions="$(jq -er '.versions | select(. > 0)' <<< "${result}")"
+          attestations="$(jq -er '.attestations | select(. >= 0)' <<< "${result}")"
+          {
+            echo "update_required=${update_required}"
+            echo "dump_taken_at=${dump_taken_at}"
+            echo "dump_key=${dump_key}"
+          } >> "${GITHUB_OUTPUT}"
+          {
+            echo "## RubyGems seed update"
+            echo
+            echo "- Dump: \`${dump_taken_at}\`"
+            echo "- Archive bytes: ${ARCHIVE_BYTES}"
+            echo "- Tracked packages: ${packages}"
+            echo "- Tracked versions: ${versions}"
+            echo "- Tracked attestations: ${attestations}"
+            echo "- Update required: ${update_required}"
+            echo "- Tracked content changed: ${content_changed}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Check existing seed proposal
+        id: proposal
+        if: steps.seed.outputs.update_required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          update_required="$(bash scripts/seed-proposal-needed.sh \
+            rubygems "${GENERATED_SEED}" automation/rubygems-seed \
+            manifest.json top_1000.tsv tracked_versions.tsv.gz tracked_attestations.tsv.gz)"
+          echo "update_required=${update_required}" >> "${GITHUB_OUTPUT}"
+          if [[ "${update_required}" == "false" ]]; then
+            echo "An identical open RubyGems seed pull request was left untouched." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Package seed candidate
+        if: steps.proposal.outputs.update_required == 'true'
+        run: |
+          tar --create --gzip --file="${RUNNER_TEMP}/rubygems-seed-candidate.tgz" \
+            --directory="${GENERATED_SEED}" \
+            manifest.json top_1000.tsv tracked_versions.tsv.gz tracked_attestations.tsv.gz
+
+      - name: Upload seed candidate
+        if: steps.proposal.outputs.update_required == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rubygems-seed-candidate
+          path: ${{ runner.temp }}/rubygems-seed-candidate.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  propose:
+    name: Propose seed pull request
+    needs: update
+    if: needs.update.outputs.update_required == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: starhaven
+      deployment: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.update.outputs.base_sha }}
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Download seed candidate
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rubygems-seed-candidate
+          path: ${{ runner.temp }}/artifact
+
+      - name: Verify seed candidate
+        run: |
+          candidate="${RUNNER_TEMP}/candidate-seed"
+          tgz="${RUNNER_TEMP}/artifact/rubygems-seed-candidate.tgz"
+          mkdir -p "${candidate}"
+          entries="$(tar --list --gzip --file="${tgz}")"
+          expected=$'manifest.json\ntop_1000.tsv\ntracked_versions.tsv.gz\ntracked_attestations.tsv.gz'
+          if [[ "$(sort <<< "${entries}")" != "$(sort <<< "${expected}")" ]]; then
+            echo "::error::seed candidate artifact contained unexpected entries"
+            exit 1
+          fi
+          tar --extract --gzip --file="${tgz}" --directory="${candidate}" --no-same-owner --no-same-permissions
+          for name in manifest.json top_1000.tsv tracked_versions.tsv.gz tracked_attestations.tsv.gz; do
+            if [[ ! -f "${candidate}/${name}" || -L "${candidate}/${name}" ]]; then
+              echo "::error::seed candidate ${name} is not a regular file"
+              exit 1
+            fi
+          done
+          result="$(bundle exec ruby research/check_rubygems_seed_update.rb seed/rubygems "${candidate}")"
+          jq -er '.update_required == true' <<< "${result}" >/dev/null
+          echo "CANDIDATE_SEED=${candidate}" >> "${GITHUB_ENV}"
+
+      - name: Mint bot token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Update automation branch and pull request
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          AUTOMATION_BRANCH: automation/rubygems-seed
+          BASE_SHA: ${{ needs.update.outputs.base_sha }}
+          DUMP_TAKEN_AT: ${{ needs.update.outputs.dump_taken_at }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="chore(data): refresh RubyGems seed"
+          bot_user="${APP_SLUG}[bot]"
+          bot_id="$(gh api "/users/${bot_user}" --jq .id)"
+          commit_body="Signed-off-by: ${bot_user} <${bot_id}+${bot_user}@users.noreply.github.com>"
+
+          if gh api "repos/${REPOSITORY}/git/ref/heads/${AUTOMATION_BRANCH}" >/dev/null 2>&1; then
+            gh api "repos/${REPOSITORY}/git/refs/heads/${AUTOMATION_BRANCH}" \
+              --method PATCH --field "sha=${BASE_SHA}" --field force=true
+          else
+            gh api "repos/${REPOSITORY}/git/refs" --method POST \
+              --field "ref=refs/heads/${AUTOMATION_BRANCH}" --field "sha=${BASE_SHA}"
+          fi
+
+          payload_file="${RUNNER_TEMP}/create-rubygems-seed-commit.json"
+          # shellcheck disable=SC2016 # $input is a GraphQL variable, not shell
+          TITLE="${title}" COMMIT_BODY="${commit_body}" PAYLOAD_FILE="${payload_file}" ruby -rjson -e '
+            seed = ENV.fetch("CANDIDATE_SEED")
+            names = %w[manifest.json top_1000.tsv tracked_versions.tsv.gz tracked_attestations.tsv.gz]
+            additions = names.map do |name|
+              { path: "seed/rubygems/#{name}", contents: [File.binread(File.join(seed, name))].pack("m0") }
+            end
+            payload = {
+              query: "mutation($input: CreateCommitOnBranchInput!) " \
+                     "{ createCommitOnBranch(input: $input) { commit { oid url } } }",
+              variables: { input: {
+                branch: { repositoryNameWithOwner: ENV.fetch("REPOSITORY"),
+                          branchName: ENV.fetch("AUTOMATION_BRANCH") },
+                message: { headline: ENV.fetch("TITLE"), body: ENV.fetch("COMMIT_BODY") },
+                fileChanges: { additions: additions }, expectedHeadOid: ENV.fetch("BASE_SHA")
+              } }
+            }
+            File.write(ENV.fetch("PAYLOAD_FILE"), JSON.generate(payload))
+          '
+          commit_url="$(gh api graphql --input "${payload_file}" --jq '.data.createCommitOnBranch.commit.url')"
+
+          body_file="${RUNNER_TEMP}/seed-pr-body.md"
+          {
+            printf 'Refresh the committed RubyGems top-1,000 seed from dump %s.\n\n' "${DUMP_TAKEN_AT}"
+            printf 'Merging this pull request authorizes the protected RubyGems data refresh.\n\n'
+            printf 'Auto-generated by the [seed update workflow](%s).\n' "${RUN_URL}"
+          } > "${body_file}"
+          existing="$(gh pr list --repo "${REPOSITORY}" --head "${AUTOMATION_BRANCH}" --base main \
+            --state open --json number --jq '.[0].number // empty')"
+          if [[ -z "${existing}" ]]; then
+            pr_url="$(gh pr create --repo "${REPOSITORY}" --base main --head "${AUTOMATION_BRANCH}" \
+              --title "${title}" --body-file "${body_file}")"
+          else
+            gh pr edit "${existing}" --repo "${REPOSITORY}" --title "${title}" --body-file "${body_file}"
+            pr_url="${GITHUB_SERVER_URL}/${REPOSITORY}/pull/${existing}"
+          fi
+          {
+            echo "## RubyGems seed pull request ready"
+            echo
+            echo "- Commit: [${title}](${commit_url})"
+            echo "- Pull request: ${pr_url}"
+            echo
+            echo "Hosted rules must require an independent human approval before merge."
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  seed-issue:
+    name: Open/close seed update issue
+    needs: [update, propose]
+    if: ${{ always() && (needs.update.result == 'success' || needs.update.result == 'failure' || needs.propose.result == 'failure') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    continue-on-error: true # issue bookkeeping must not override the seed update result
+    permissions:
+      issues: write # required to find, create, comment on, and close the failure issue
+    steps:
+      - name: Open, update, or close seed update issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_TITLE: Update RubyGems seed workflow failing
+          PROPOSE_RESULT: ${{ needs.propose.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          UPDATE_RESULT: ${{ needs.update.result }}
+        run: |
+          if [ "${UPDATE_RESULT}" = "failure" ] || [ "${PROPOSE_RESULT}" = "failure" ]; then
+            overall="failure"
+          elif [ "${UPDATE_RESULT}" = "success" ] && { [ "${PROPOSE_RESULT}" = "success" ] || [ "${PROPOSE_RESULT}" = "skipped" ]; }; then
+            overall="success"
+          else
+            exit 0
+          fi
+
+          retry_gh() {
+            local attempt output
+            for attempt in 1 2 3; do
+              if output="$(gh "$@")"; then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+              if [ "${attempt}" -lt 3 ]; then
+                echo "::warning::gh $1 failed on attempt ${attempt}; retrying in 5 seconds" >&2
+                sleep 5
+              fi
+            done
+            return 1
+          }
+
+          if ! numbers="$(retry_gh api --paginate --method GET "repos/${GH_REPO}/issues" \
+              -f state=open \
+              -f 'creator=github-actions[bot]' \
+              -f per_page=100 \
+              --jq '.[] | select(.title == env.ISSUE_TITLE and (has("pull_request") | not)) | .number')"; then
+            echo "::warning::failed to list seed update failure issues"
+            exit 1
+          fi
+
+          bookkeeping_status=0
+
+          if [ "${overall}" = "success" ]; then
+            while IFS= read -r number; do
+              [ -n "${number}" ] || continue
+              if ! retry_gh issue close "${number}" --reason completed \
+                  --comment "Seed update run succeeded: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to close seed update issue #${number}"
+                bookkeeping_status=1
+              fi
+            done <<< "${numbers}"
+          else
+            number="${numbers%%$'\n'*}"
+            if [ -n "${number}" ]; then
+              if ! retry_gh issue comment "${number}" --body "Seed update run failed: ${RUN_URL}" </dev/null; then
+                echo "::warning::failed to comment on seed update issue #${number}"
+                bookkeeping_status=1
+              fi
+            else
+              issue_body="$(printf 'Seed update run failed: %s\n\nFiled automatically by update-rubygems-seed.yml; the next successful update closes this issue.\n' \
+                "${RUN_URL}")"
+              if ! retry_gh issue create --title "${ISSUE_TITLE}" --body "${issue_body}" </dev/null; then
+                echo "::warning::failed to create seed update failure issue"
+                bookkeeping_status=1
+              fi
+            fi
+          fi
+
+          exit "${bookkeeping_status}"

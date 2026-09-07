@@ -6,6 +6,7 @@ require "json"
 require "net/http"
 require "openssl"
 require "time"
+require "tempfile"
 require "uri"
 
 module Ingestion
@@ -34,6 +35,7 @@ module Ingestion
     }.freeze
     MAX_DOWNLOAD_REDIRECTS = 3
     MAX_ATTEMPTS = 4
+    MAX_JSON_BYTES = 10 * 1024 * 1024
     REQUEST_ID_LIMIT = 100
     ERROR_DETAIL_LIMIT = 500
     RETRYABLE_TRANSPORT_ERRORS = [
@@ -54,6 +56,28 @@ module Ingestion
     class Error < StandardError
     end
 
+    # A successful response whose body violates the registry's documented
+    # contract. Callers may isolate this to one package version while still
+    # treating transport and service failures as batch-fatal.
+    class InvalidDataError < Error
+    end
+
+    class NotFoundError < Error
+    end
+
+    class BoundedResponse
+      attr_reader :body
+
+      def initialize(response, body)
+        @response = response
+        @body = body
+      end
+
+      def code = @response.code
+      def [](header) = @response[header]
+    end
+    private_constant :BoundedResponse
+
     def initialize(cache_dir: Hanami.app.root.join("var", "cache", "http").to_s,
                    transport: nil,
                    download_transport: nil,
@@ -61,45 +85,62 @@ module Ingestion
                    clock: -> { Process.clock_gettime(Process::CLOCK_MONOTONIC) })
       @cache_dir = cache_dir
       @transport = transport || method(:default_transport)
-      @download_transport = download_transport || method(:default_download_transport)
+      @download_transport = if download_transport
+                              lambda do |uri, headers, destination, _max_bytes|
+                                download_transport.call(uri, headers, destination)
+                              end
+                            else
+                              method(:default_download_transport)
+                            end
       @sleeper = sleeper
       @clock = clock
       @last_request_at = {}
     end
 
-    # GET a URL and return parsed JSON (or nil on 404).
-    def get_json(url, ttl: nil, accept: DEFAULT_ACCEPT)
+    # GET a URL and return parsed JSON. A caller must explicitly opt into nil
+    # for an endpoint whose documented contract uses 404 as an empty result.
+    def get_json(url, ttl: nil, accept: DEFAULT_ACCEPT, allow_not_found: false)
       cached = read_cache(url, ttl:, accept:)
       return cached[:json] if cached
 
       response = fetch_with_backoff(url, accept:)
+      body = bounded_body(response, url)
       case response.code.to_i
       when 200
-        json = JSON.parse(response.body)
-        write_cache(url, response.body, accept:)
+        json = JSON.parse(body)
+        write_cache(url, body, accept:)
         json
       when 404
-        nil
+        return nil if allow_not_found
+
+        raise NotFoundError, "GET #{url} returned 404#{error_context(response)}"
       else
         raise Error, "GET #{url} returned #{response.code}#{error_context(response)}"
       end
+    rescue JSON::ParserError => e
+      raise InvalidDataError, "GET #{url} returned invalid JSON: #{e.message}", cause: e
     end
 
     # Stream a binary response to an atomic destination path. The public dump
     # is too large to buffer in memory or retain in the JSON response cache.
-    def download(url, destination:, accept: DOWNLOAD_ACCEPT)
+    def download(url, destination:, accept: DOWNLOAD_ACCEPT, max_bytes: nil)
+      max_bytes = Integer(max_bytes) if max_bytes
+      raise ArgumentError, "max_bytes must be positive" if max_bytes && !max_bytes.positive?
+
       destination = File.expand_path(destination)
       partial = "#{destination}.part"
       FileUtils.mkdir_p(File.dirname(destination))
 
       transport = lambda do |uri, headers|
         FileUtils.rm_f(partial)
-        @download_transport.call(uri, headers.merge("Accept-Encoding" => "identity"), partial)
+        @download_transport.call(uri, headers.merge("Accept-Encoding" => "identity"), partial, max_bytes)
       end
       response = fetch_with_backoff(url, accept:, transport:)
       raise Error, "GET #{url} returned #{response.code}#{error_context(response)}" unless response.code.to_i == 200
 
       bytes = File.size(partial)
+      raise Error, "GET #{url} received more than #{max_bytes} bytes" if max_bytes && bytes > max_bytes
+
       content_length = response["Content-Length"].to_s
       if content_length.match?(/\A\d+\z/) && bytes != content_length.to_i
         raise Error, "GET #{url} received #{bytes} bytes; expected #{content_length}"
@@ -116,6 +157,10 @@ module Ingestion
     def fetch_with_backoff(url, accept:, transport: @transport)
       attempts = 0
       uri = URI(url)
+      unless uri.is_a?(URI::HTTPS) && uri.host && uri.userinfo.nil? && uri.port == 443
+        raise Error, "GET #{url} is not an approved HTTPS URL"
+      end
+
       headers = { "User-Agent" => USER_AGENT, "Accept" => accept }
       begin
         attempts += 1
@@ -137,16 +182,27 @@ module Ingestion
 
         @sleeper.call(2**attempts)
         retry
+      rescue *RETRYABLE_TRANSPORT_ERRORS => e
+        raise Error, "GET #{url} failed after #{attempts} attempts (#{e.class})" if attempts >= MAX_ATTEMPTS
+
+        @sleeper.call(2**attempts)
+        retry
       end
     end
 
     def default_transport(uri, headers)
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 30) do |http|
-        http.get(uri.request_uri, headers)
+        request = Net::HTTP::Get.new(uri)
+        headers.each { |name, value| request[name] = value }
+        response = nil
+        http.request(request) do |candidate|
+          response = BoundedResponse.new(candidate, read_bounded_body(candidate, uri, MAX_JSON_BYTES))
+        end
+        response
       end
     end
 
-    def default_download_transport(uri, headers, destination, redirects: 0)
+    def default_download_transport(uri, headers, destination, max_bytes = nil, redirects: 0)
       response = nil
       redirect_uri = nil
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 10, read_timeout: 120) do |http|
@@ -155,11 +211,22 @@ module Ingestion
         http.request(request) do |candidate|
           response = candidate
           if candidate.code.to_i == 200
+            content_length = candidate["Content-Length"].to_s
+            if max_bytes && content_length.match?(/\A\d+\z/) && content_length.to_i > max_bytes
+              raise Error, "GET #{uri} declared more than #{max_bytes} bytes"
+            end
+
             File.open(destination, "wb") do |file|
-              candidate.read_body { |chunk| file.write(chunk) }
+              bytes = 0
+              candidate.read_body do |chunk|
+                bytes += chunk.bytesize
+                raise Error, "GET #{uri} received more than #{max_bytes} bytes" if max_bytes && bytes > max_bytes
+
+                file.write(chunk)
+              end
             end
           else
-            candidate.body
+            response = BoundedResponse.new(candidate, read_bounded_body(candidate, uri, MAX_JSON_BYTES))
             if candidate.code.to_i.between?(300, 399)
               redirect_uri = permitted_download_redirect(uri, candidate["Location"], redirects:)
             end
@@ -169,7 +236,7 @@ module Ingestion
       return response unless redirect_uri
 
       throttle(redirect_uri.host)
-      default_download_transport(redirect_uri, headers, destination, redirects: redirects + 1)
+      default_download_transport(redirect_uri, headers, destination, max_bytes, redirects: redirects + 1)
     rescue *RETRYABLE_TRANSPORT_ERRORS => e
       raise RetryableTransportError.new(e), cause: e
     end
@@ -188,6 +255,20 @@ module Ingestion
       redirect_uri
     rescue URI::InvalidURIError
       raise Error, "GET #{uri} returned an invalid redirect location"
+    end
+
+    def read_bounded_body(response, uri, max_bytes)
+      content_length = response["Content-Length"].to_s
+      if content_length.match?(/\A\d+\z/) && content_length.to_i > max_bytes
+        raise Error, "GET #{uri} declared more than #{max_bytes} bytes"
+      end
+
+      body = +"".b
+      response.read_body do |chunk|
+        body << chunk
+        raise Error, "GET #{uri} returned more than #{max_bytes} bytes" if body.bytesize > max_bytes
+      end
+      body
     end
 
     class RetryableError < StandardError
@@ -220,6 +301,13 @@ module Ingestion
       parts << "request_id=#{request_id}" unless request_id.empty?
       parts << detail if detail
       parts.empty? ? "" : " (#{parts.join("; ")})"
+    end
+
+    def bounded_body(response, url)
+      body = response.body.to_s
+      return body if body.bytesize <= MAX_JSON_BYTES
+
+      raise Error, "GET #{url} returned more than #{MAX_JSON_BYTES} bytes"
     end
 
     def error_detail(body)
@@ -284,14 +372,19 @@ module Ingestion
 
       path = cache_path(url, accept:)
       return nil unless File.exist?(path)
+      return nil if File.size(path) > MAX_JSON_BYTES
 
       # Written as UTF-8 by write_cache, so read it back as UTF-8 rather than
       # as whatever the process locale happens to be.
       envelope = JSON.parse(File.read(path, encoding: "UTF-8"))
-      return nil if ttl && (Time.now - Time.parse(envelope["fetched_at"])) > ttl
+      return nil unless envelope.is_a?(Hash) && envelope["url"] == url && envelope["accept"] == accept
+      return nil if ttl && (Time.now - Time.iso8601(envelope.fetch("fetched_at"))) > ttl
 
-      { json: JSON.parse(envelope["body"]) }
-    rescue JSON::ParserError
+      body = envelope.fetch("body")
+      return nil unless body.is_a?(String) && body.bytesize <= MAX_JSON_BYTES
+
+      { json: JSON.parse(body) }
+    rescue JSON::ParserError, KeyError, ArgumentError, TypeError
       nil
     end
 
@@ -299,9 +392,15 @@ module Ingestion
       FileUtils.mkdir_p(@cache_dir)
       # Net::HTTP hands back BINARY-tagged bodies; these are JSON, so UTF-8.
       utf8_body = body.dup.force_encoding(Encoding::UTF_8)
-      File.write(cache_path(url, accept:),
-                 JSON.generate({ "url" => url, "accept" => accept,
-                                 "fetched_at" => Time.now.iso8601, "body" => utf8_body }))
+      envelope = JSON.generate({ "url" => url, "accept" => accept,
+                                 "fetched_at" => Time.now.utc.iso8601, "body" => utf8_body })
+      path = cache_path(url, accept:)
+      Tempfile.create([".rakkan-http-cache-", ".tmp"], @cache_dir) do |tmp|
+        tmp.write(envelope)
+        tmp.flush
+        tmp.fsync
+        File.rename(tmp.path, path)
+      end
     end
   end
 end

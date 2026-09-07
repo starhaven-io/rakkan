@@ -24,7 +24,7 @@ const sites: Record<RegistrySlug, RegistrySite> = {
     packageUrl: (name) => `https://rubygems.org/gems/${encodeURIComponent(name)}`,
     adoptionDescription: (noun) =>
       `Attestation presence is a lower bound: a ${noun} can be pushed by a trusted publisher without attestations.`,
-    historyDescription: 'One observation per weekly dump.',
+    historyDescription: 'One completed refresh observation per UTC day.',
     releaseDescription: 'Certificate-derived build identity per recorded version.',
   },
   cratesio: {
@@ -36,7 +36,7 @@ const sites: Record<RegistrySlug, RegistrySite> = {
     packageUrl: (name) => `https://crates.io/crates/${encodeURIComponent(name)}`,
     adoptionDescription: (noun) =>
       `A ${noun} counts as adopted when at least one tracked release reports trusted-publisher metadata from crates.io.`,
-    historyDescription: 'Observations are dated to the crates.io dump behind each tracked-set refresh.',
+    historyDescription: 'One completed refresh observation per UTC day.',
     releaseDescription: 'Trusted-publisher metadata per recorded version.',
   },
 };

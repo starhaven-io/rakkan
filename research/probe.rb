@@ -6,20 +6,25 @@
 #
 # Usage: ruby research/probe.rb <url> <output-path> [<url> <output-path> ...]
 
-require "net/http"
-require "uri"
 require "fileutils"
+require "uri"
+require_relative "../slices/ingestion/http_client"
 
-USER_AGENT = "rakkan/0.1 (trusted publishing adoption tracker; +https://rakkan.dev)"
+ALLOWED_PROBE_HOSTS = %w[api.deps.dev crates.io pypi.org rubygems.org].freeze
+abort "usage: ruby research/probe.rb <url> <output-path> [<url> <output-path> ...]" if ARGV.empty? || ARGV.length.odd?
+
+cache_dir = File.expand_path("../var/cache/http", __dir__)
+client = Ingestion::HTTPClient.new(cache_dir:)
 
 ARGV.each_slice(2) do |url, out|
-  abort "need url/output pairs" if out.nil?
   uri = URI(url)
-  res = Net::HTTP.start(uri.host, uri.port, use_ssl: true) do |http|
-    http.get(uri.request_uri, { "User-Agent" => USER_AGENT, "Accept" => "application/json" })
-  end
+  abort "unsupported probe host: #{uri.host}" unless uri.is_a?(URI::HTTPS) && ALLOWED_PROBE_HOSTS.include?(uri.host)
   FileUtils.mkdir_p(File.dirname(out))
-  File.write(out, res.body)
-  puts "#{res.code} #{url} -> #{out} (#{res.body.bytesize} bytes)"
-  sleep 0.25
+  result = client.download(
+    url,
+    destination: out,
+    accept: "application/json",
+    max_bytes: Ingestion::HTTPClient::MAX_JSON_BYTES
+  )
+  puts "200 #{url} -> #{out} (#{result.fetch(:bytes)} bytes)"
 end

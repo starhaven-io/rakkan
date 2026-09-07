@@ -35,8 +35,8 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
     to = Time.utc(2026, 8, 14, 12)
     adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
                                     { entries: [
-                                      entry("psych", "9.9.9", Time.utc(2026, 8, 14, 10)),
                                       entry("psych", "9.9.8", Time.utc(2026, 8, 14, 9), yanked: true),
+                                      entry("psych", "9.9.9", Time.utc(2026, 8, 14, 10)),
                                       entry("not-tracked", "1.0.0", Time.utc(2026, 8, 14, 11))
                                     ], drained: true, pages: 1 }
                                   ])
@@ -63,6 +63,26 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
     expect(adapter.calls.map { |c| c[:to] - c[:from] }).to all(be <= 7 * 24 * 3600)
     expect(adapter.calls.first[:from]).to eq(from)
     expect(adapter.calls.last[:to]).to eq(to)
+  end
+
+  it "uses the API's whole-second precision for bounds, validation, and the cursor" do
+    registry = create_registry!
+    create_package!(registry, name: "psych")
+    second = Time.utc(2026, 8, 14, 8)
+    from = second + 0.789
+    to = second + 1.789
+    published_at = second + 0.3
+    adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
+                                    { entries: [entry("psych", "1.0.0", published_at)],
+                                      drained: true, pages: 1 }
+                                  ])
+
+    result = operation.call(from:, to:, adapter:)
+
+    expect(adapter.calls.first).to include(from: second, to: second + 1)
+    expect(result.value!).to include(window_from: second, window_to: second + 1,
+                                     synced_through: second + 1, upserts: 1)
+    expect(registries.by_pk(registry.id).one[:feed_synced_at].to_time).to eq(second + 1)
   end
 
   it "parks the cursor at the last processed instant when the page budget runs out" do
@@ -107,5 +127,37 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
     expect(versions.count).to eq(0)
     expect(registries.by_pk(rubygems_registry.id).one[:feed_synced_at]).not_to be_nil
     expect(registries.by_pk(other.id).one[:feed_synced_at]).to be_nil
+  end
+
+  it "rejects invalid feed progress without writing data or advancing the cursor" do
+    registry = create_registry!
+    create_package!(registry, name: "psych")
+    from = Time.utc(2026, 8, 14)
+    adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
+                                    { entries: [entry("psych", "1.0.0", from)],
+                                      drained: false, pages: 500 }
+                                  ])
+
+    expect { operation.call(from:, to: from + 3600, adapter:) }
+      .to raise_error(ArgumentError, /made no cursor progress/)
+    expect(versions.count).to eq(0)
+    expect(registries.by_pk(registry.id).one[:feed_synced_at]).to be_nil
+  end
+
+  it "rejects out-of-window or unordered feed entries before writing" do
+    registry = create_registry!
+    create_package!(registry, name: "psych")
+    from = Time.utc(2026, 8, 14)
+    to = from + 3600
+    adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
+                                    { entries: [
+                                      entry("psych", "2.0.0", from + 1800),
+                                      entry("psych", "1.0.0", from + 900)
+                                    ], drained: true, pages: 1 }
+                                  ])
+
+    expect { operation.call(from:, to:, adapter:) }.to raise_error(ArgumentError, /must be ordered/)
+    expect(versions.count).to eq(0)
+    expect(registries.by_pk(registry.id).one[:feed_synced_at]).to be_nil
   end
 end

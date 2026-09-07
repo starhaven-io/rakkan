@@ -37,10 +37,12 @@ RSpec.describe "export rake tasks", :db do
       restored = SQLite3::Database.new(":memory:")
       restored.execute("PRAGMA foreign_keys = ON")
       sql = File.read(export, encoding: "UTF-8")
+      expect(sql.index("CREATE TABLE export_meta")).to be > sql.rindex("INSERT INTO adoption_snapshots")
       2.times { restored.execute_batch(sql) }
 
       expect(restored.get_first_value("PRAGMA foreign_key_check")).to be_nil
       expect(restored.get_first_value("SELECT generated_at FROM export_meta")).not_to be_nil
+      expect(restored.get_first_value("SELECT schema_version FROM export_meta")).to eq(1)
       expect(restored.get_first_row("SELECT name, display_name FROM registries")).to eq(%w[rubygems RubyGems.org])
       expect(restored.get_first_row("SELECT name, tracked, rank FROM packages")).to eq(["psych", 1, 1])
       expect(restored.get_first_row("SELECT number, provenance_kind FROM package_versions"))
@@ -52,5 +54,28 @@ RSpec.describe "export rake tasks", :db do
     ensure
       restored&.close
     end
+  end
+
+  it "rejects a non-integer schema contract version" do
+    contract = Hanami.app.root.join("site", "schema-contract.json").to_s
+    allow(File).to receive(:read).and_call_original
+    allow(File).to receive(:read).with(contract, encoding: "UTF-8")
+                                 .and_return('{"version":1.5,"compatibleVersions":[1]}')
+
+    expect { Rake::Task["export:d1"].invoke }
+      .to raise_error(ArgumentError, "site schema contract version must be a positive integer")
+  end
+
+  it "rejects an invalid schema compatibility set" do
+    contract = Hanami.app.root.join("site", "schema-contract.json").to_s
+    allow(File).to receive(:read).and_call_original
+    allow(File).to receive(:read).with(contract, encoding: "UTF-8")
+                                 .and_return('{"version":1,"compatibleVersions":[2,2]}')
+
+    expect { Rake::Task["export:d1"].invoke }
+      .to raise_error(
+        ArgumentError,
+        "site schema compatible versions must be unique positive integers including the export version"
+      )
   end
 end

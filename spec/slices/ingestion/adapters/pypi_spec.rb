@@ -54,6 +54,7 @@ RSpec.describe Ingestion::Adapters::Pypi do
        "application/vnd.pypi.integrity.v1+json"]
     )
     expect(client.ttls).to eq([3600, 0, 0])
+    expect(client.allow_not_founds).to eq([false, true, true])
   end
 
   it "returns nil when no distribution file has provenance" do
@@ -63,5 +64,16 @@ RSpec.describe Ingestion::Adapters::Pypi do
     provenance = adapter.fetch_provenance(name: "sampleproject", number: "4.0.0", platform: "python")
 
     expect(provenance).to be_nil
+  end
+
+  it "fails closed on malformed release and provenance payloads" do
+    responses[release_url] = {}
+    expect { adapter.fetch_provenance(name: "sampleproject", number: "4.0.0", platform: "python") }
+      .to raise_error(Ingestion::HTTPClient::Error, /urls array/)
+
+    responses[release_url] = json_fixture("pypi_release_sampleproject-4.0.0.json")
+    responses[wheel_url] = { "attestation_bundles" => [] }
+    expect { adapter.fetch_provenance(name: "sampleproject", number: "4.0.0", platform: "python") }
+      .to raise_error(Ingestion::HTTPClient::Error, /attestation bundles/)
   end
 end

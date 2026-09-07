@@ -2,6 +2,9 @@
 import cloudflare from '@astrojs/cloudflare';
 import { defineConfig } from 'astro/config';
 
+// Per-user Wrangler log files are not durable CI evidence and break isolated workspaces.
+process.env.WRANGLER_WRITE_LOGS ??= 'false';
+
 // https://astro.build/config
 export default defineConfig({
   site: 'https://rakkan.dev',

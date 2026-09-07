@@ -19,21 +19,17 @@ RSpec.describe Ingestion::Adapters::Rubygems::Attestation do
     )
   end
 
-  it "returns nil when no certificate is present" do
-    expect(described_class.parse([{ "mediaType" => "x" }])).to be_nil
+  it "returns nil only for an empty attestation list" do
+    expect(described_class.parse([])).to be_nil
   end
 
-  it "recovers identity from a later bundle when the first is malformed" do
-    provenance = described_class.parse([{ "mediaType" => "x" }, bundles.first])
-
-    expect(provenance).to include(
-      source_repository: "https://github.com/sigstore/sigstore-ruby",
-      attestation_count: 2
-    )
+  it "fails closed when any reported bundle has no parseable certificate" do
+    expect { described_class.parse([{ "mediaType" => "x" }, bundles.first]) }
+      .to raise_error(Ingestion::HTTPClient::Error, /no parseable certificate/)
   end
 
   it "is order-independent for multiple bundles" do
-    doubled = [bundles.first, { "mediaType" => "x" }, bundles.first]
+    doubled = [bundles.first, bundles.first]
 
     expect(described_class.parse(doubled)).to eq(described_class.parse(doubled.reverse))
   end

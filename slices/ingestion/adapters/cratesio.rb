@@ -59,8 +59,6 @@ module Ingestion
       # recorded as "no provenance found".
       def provenance_seed_as_of = nil
 
-      def snapshot_taken_on = seed_as_of&.utc&.to_date
-
       def provenance_available_since = PROVENANCE_AVAILABLE_SINCE
 
       def each_tracked_package
@@ -102,9 +100,17 @@ module Ingestion
       # the shared adapter contract used by RefreshProvenance.
       def fetch_provenance(name:, number:, platform:) # rubocop:disable Lint/UnusedMethodArgument
         response = http_client.get_json(
-          "#{API_BASE}/crates/#{path_segment(name)}/#{path_segment(number)}", ttl: 0
+          "#{API_BASE}/crates/#{path_segment(name)}/#{path_segment(number)}",
+          ttl: 0
         )
-        provenance_from(response&.dig("version", "trustpub_data"))
+
+        version = response.is_a?(Hash) ? response["version"] : nil
+        unless version.is_a?(Hash)
+          raise Ingestion::HTTPClient::InvalidDataError,
+                "crates.io version response must contain a version object"
+        end
+
+        provenance_from(version["trustpub_data"])
       end # rubocop:enable Lint/UnusedMethodArgument
 
       # The versions endpoint exposes the same trustpub_data as the
@@ -114,9 +120,18 @@ module Ingestion
         return enum_for(__method__, name:, versions:) unless block_given?
 
         response = http_client.get_json(
-          "#{API_BASE}/crates/#{path_segment(name)}/versions", ttl: 0
+          "#{API_BASE}/crates/#{path_segment(name)}/versions",
+          ttl: 0,
+          allow_not_found: true
         )
         response_versions = response.is_a?(Hash) ? response["versions"] : nil
+        if response && !response_versions.is_a?(Array)
+          error = Ingestion::HTTPClient::InvalidDataError.new(
+            "crates.io versions response must contain a versions array"
+          )
+          versions.each { |version| yield(version, nil, error) }
+          return
+        end
         versions_by_number = Array(response_versions).each_with_object({}) do |version, index|
           next unless version.is_a?(Hash) && version["num"].is_a?(String)
 
@@ -130,17 +145,27 @@ module Ingestion
                        else
                          fetch_provenance(name:, number: version[:number], platform: version[:platform])
                        end
-          yield(version, provenance)
+          yield(version, provenance, nil)
+        rescue Ingestion::HTTPClient::InvalidDataError,
+               Ingestion::HTTPClient::NotFoundError => e
+          yield(version, nil, e)
         end
       end
 
       private
 
       def provenance_from(trustpub)
-        return nil unless trustpub.is_a?(Hash)
+        return nil if trustpub.nil?
+        unless trustpub.is_a?(Hash)
+          raise Ingestion::HTTPClient::InvalidDataError,
+                "crates.io trustpub_data must be an object or null"
+        end
 
         provider = trustpub["provider"].to_s.strip.downcase
-        return nil if provider.empty?
+        if provider.empty?
+          raise Ingestion::HTTPClient::InvalidDataError,
+                "crates.io trustpub_data must identify a provider"
+        end
 
         repository_field, run_field = TRUSTPUB_FIELDS.fetch(provider, [])
         repository = repository_field && trustpub[repository_field]

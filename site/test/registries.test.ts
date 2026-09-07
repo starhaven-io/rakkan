@@ -18,7 +18,7 @@ test('registry route families preserve RubyGems URLs and scope crates.io URLs', 
   );
 });
 
-test('internal and registry package links encode package names', () => {
+test('route-owned package links encode canonical paths exactly once', () => {
   const rubygems = registrySite('rubygems');
   const cratesio = registrySite('cratesio');
 
@@ -26,6 +26,7 @@ test('internal and registry package links encode package names', () => {
   assert.equal(rubygems.packageUrl('name with/slash'), 'https://rubygems.org/gems/name%20with%2Fslash');
   assert.equal(cratesio.packagePath('name with/slash'), '/cratesio/packages/name%20with%2Fslash');
   assert.equal(cratesio.packageUrl('name with/slash'), 'https://crates.io/crates/name%20with%2Fslash');
+  assert.notEqual(rubygems.packagePath('scope/name'), '/packages/scope%252Fname');
 });
 
 test('registry-specific explanations describe the provenance signal and observation cadence', () => {
@@ -33,11 +34,11 @@ test('registry-specific explanations describe the provenance signal and observat
   const cratesio = registrySite('cratesio');
 
   assert.match(rubygems.adoptionDescription('gem'), /lower bound/);
-  assert.match(rubygems.historyDescription, /weekly dump/);
+  assert.match(rubygems.historyDescription, /UTC day/);
   assert.match(rubygems.releaseDescription, /Certificate-derived/);
 
   assert.match(cratesio.adoptionDescription('crate'), /trusted-publisher metadata/);
-  assert.match(cratesio.historyDescription, /crates\.io dump/);
+  assert.match(cratesio.historyDescription, /UTC day/);
   assert.match(cratesio.releaseDescription, /Trusted-publisher metadata/);
 });
 

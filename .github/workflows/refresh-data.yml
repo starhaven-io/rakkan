@@ -1,4 +1,5 @@
 name: Refresh Data
+run-name: Refresh Data (${{ inputs.registry || 'rubygems' }}) [${{ inputs.request_id || github.run_id }}]
 
 on:
   workflow_dispatch:
@@ -11,10 +12,19 @@ on:
         options:
           - rubygems
           - cratesio
+          - all
       refresh_limit:
-        description: Maximum provenance lookups per attempt
+        description: Maximum ordinary provenance lookups per attempt
         required: true
         default: "250"
+        type: string
+      authorized_sha:
+        description: Exact main SHA authorized by a merged seed update (normally left blank)
+        required: false
+        type: string
+      request_id:
+        description: Opaque dispatch correlation identifier
+        required: false
         type: string
   schedule:
     # RubyGems publishes its weekly dump on Monday; refresh after it lands.
@@ -24,11 +34,17 @@ on:
       - main
     paths:
       - ".github/workflows/refresh-data.yml"
-      - "config/db/migrate/**"
-      - "config/db/structure.sql"
-      - "db/normalize_rubygems_weekly_snapshots.sql"
-      - "scripts/normalize-rubygems-weekly-snapshots.sh"
-      - "seed/rubygems/**"
+      - ".ruby-version"
+      - "Gemfile"
+      - "Gemfile.lock"
+      - "app/**"
+      - "config/**"
+      - "lib/**"
+      - "research/**"
+      - "scripts/**"
+      - "seed/**"
+      - "site/schema-contract.json"
+      - "slices/ingestion/**"
 
 permissions: {}
 
@@ -36,33 +52,54 @@ defaults:
   run:
     shell: bash -euo pipefail {0}
 
+# Keep bookkeeping alive when a writer job is superseded; the refresh job's
+# shared d1-production-write group provides the actual database lock.
 concurrency:
-  group: refresh-data
-  cancel-in-progress: false # never interrupt a production D1 replacement
+  group: refresh-data-run-${{ github.run_id }}
+  cancel-in-progress: false
 
 jobs:
   refresh:
     name: Refresh registry data
-    if: github.repository_owner == 'starhaven-io'
+    if: >-
+      github.repository == 'starhaven-io/rakkan' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name != 'push' &&
+      (
+        github.event_name != 'workflow_dispatch' ||
+        inputs.authorized_sha == '' ||
+        inputs.authorized_sha == github.sha
+      )
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
+    concurrency:
+      # Every refresh and rollback replaces the same complete D1 database.
+      group: d1-production-write
+      cancel-in-progress: false # never interrupt a production D1 replacement
+      queue: max # retain pending deploy, refresh, and rollback work instead of replacing it
     permissions:
       contents: read # required to checkout repository
-    environment: cloudflare
+    environment: cloudflare-d1
     env:
       DATABASE_URL: sqlite://db/rakkan.sqlite
       HANAMI_ENV: production
       REGISTRY: ${{ inputs.registry || 'rubygems' }}
       REFRESH_LIMIT: ${{ inputs.refresh_limit || '250' }}
+      AUTHORIZED_SHA: ${{ inputs.authorized_sha || github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ env.AUTHORIZED_SHA }}
           persist-credentials: false
 
       - name: Validate refresh inputs
         run: |
-          if ! [[ "${REGISTRY}" =~ ^(rubygems|cratesio)$ ]]; then
-            echo "::error::registry must be rubygems or cratesio"
+          if ! [[ "${AUTHORIZED_SHA}" =~ ^[0-9a-f]{40}$ ]] || [[ "${AUTHORIZED_SHA}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::authorized_sha must be the exact workflow main SHA"
+            exit 1
+          fi
+          if ! [[ "${REGISTRY}" =~ ^(rubygems|cratesio|all)$ ]]; then
+            echo "::error::registry must be rubygems, cratesio, or all"
             exit 1
           fi
           if ! [[ "${REFRESH_LIMIT}" =~ ^[1-9][0-9]{0,3}$ ]] || (( REFRESH_LIMIT > 1000 )); then
@@ -94,6 +131,13 @@ jobs:
       - name: Export current production data
         working-directory: site
         run: |
+          time_travel="$(./node_modules/.bin/wrangler d1 time-travel info rakkan --json)"
+          bookmark="$(jq -er '.bookmark | select(type == "string" and length > 0)' <<< "${time_travel}")"
+          printf '%s\n' "${bookmark}" > "${D1_BOOKMARK_FILE}"
+          ./node_modules/.bin/wrangler d1 export rakkan \
+            --remote \
+            --skip-confirmation \
+            --output="${D1_BACKUP_SQL}"
           ./node_modules/.bin/wrangler d1 export rakkan \
             --remote \
             --skip-confirmation \
@@ -103,10 +147,62 @@ jobs:
             --table=package_versions \
             --table=adoption_snapshots \
             --output="${D1_DATA_SQL}"
+
+          columns="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='PRAGMA table_info(export_meta)')"
+          column_names="$(jq -cer '[.[0].results[].name] | sort' <<< "${columns}")"
+          metadata="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='SELECT * FROM export_meta LIMIT 1')"
+          metadata_row="$(jq -cer '.[0].results | select(length == 1) | .[0]' <<< "${metadata}")"
+          if [[ "${column_names}" == '["generated_at"]' ]]; then
+            schema_version=1
+          elif [[ "${column_names}" == '["generated_at","schema_version"]' ]]; then
+            schema_version="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
+              <<< "${metadata_row}")"
+          else
+            echo "::error::production D1 has an unknown export_meta shape: ${column_names}"
+            exit 1
+          fi
+          generated_at="$(jq -er '.generated_at | select(type == "string" and length > 0)' \
+            <<< "${metadata_row}")"
+          counts_result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
+            SELECT
+              (SELECT COUNT(*) FROM registries) AS registries,
+              (SELECT COUNT(*) FROM packages) AS packages,
+              (SELECT COUNT(*) FROM package_versions) AS package_versions,
+              (SELECT COUNT(*) FROM adoption_snapshots) AS adoption_snapshots
+          ')"
+          counts="$(jq -cer '.[0].results | select(length == 1) | .[0] |
+            select([.registries, .packages, .package_versions, .adoption_snapshots] |
+              all(type == "number" and floor == . and . > 0))' <<< "${counts_result}")"
+          backup_sha256="$(sha256sum "${D1_BACKUP_SQL}" | cut -d ' ' -f 1)"
+          jq -n \
+            --arg bookmark "${bookmark}" \
+            --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg generated_at "${generated_at}" \
+            --arg backup_sha256 "${backup_sha256}" \
+            --argjson schema_version "${schema_version}" \
+            --argjson counts "${counts}" '
+              {
+                version: 1,
+                database: "rakkan",
+                created_at: $created_at,
+                bookmark: $bookmark,
+                schema_version: $schema_version,
+                generated_at: $generated_at,
+                counts: $counts,
+                backup_sha256: $backup_sha256
+              }
+            ' > "${D1_RECOVERY_MANIFEST}"
+          bundle exec ruby ../scripts/verify_d1_recovery_manifest.rb \
+            "${D1_RECOVERY_MANIFEST}" "${D1_BACKUP_SQL}" >/dev/null
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          D1_BACKUP_SQL: ${{ runner.temp }}/rakkan-d1-backup.sql
+          D1_BOOKMARK_FILE: ${{ runner.temp }}/rakkan-d1-bookmark.txt
           D1_DATA_SQL: ${{ runner.temp }}/rakkan-d1-data.sql
+          D1_RECOVERY_MANIFEST: ${{ runner.temp }}/rakkan-d1-recovery.json
           WRANGLER_SEND_METRICS: "false"
 
       - name: Restore production history
@@ -132,73 +228,123 @@ jobs:
             fi
           done
 
+      - name: Repair known mislabeled RubyGems history
+        run: bundle exec rake snapshot:repair_rubygems_history
+
       - name: Ingest registry changes
-        run: |
-          bundle exec rake "ingest:seed[${REGISTRY}]"
-          if [[ "${REGISTRY}" == "rubygems" ]]; then
-            # A capped attempt persists its cursor in this job's database; retry
-            # here so a backlog can converge before any snapshot is published.
-            for attempt in 1 2 3; do
-              if bundle exec rake "ingest:discover[${REGISTRY}]"; then
-                break
-              fi
-              if (( attempt == 3 )); then
-                echo "::error::ingest:discover did not drain after ${attempt} attempts"
-                exit 1
-              fi
-              echo "::warning::ingest:discover reached its page budget; retrying from its cursor"
-            done
-          fi
-          refresh_deadline=$(( SECONDS + 1800 - REFRESH_LIMIT ))
-          refresh_result=""
-          for attempt in 1 2 3; do
-            if refresh_result="$(bundle exec rake "ingest:refresh[${REFRESH_LIMIT},${REGISTRY}]")"; then
-              printf '%s\n' "${refresh_result}"
-              break
-            fi
-            if (( attempt == 3 || SECONDS >= refresh_deadline )); then
-              echo "::error::ingest:refresh did not complete within its retry budget"
-              exit 1
-            fi
-            echo "::warning::ingest:refresh failed; retrying from its persisted checks"
-          done
-
-          refresh_payload="${refresh_result##*$'\n'}"
-          if ! remaining="$(jq -er '.remaining | select(type == "number" and . >= 0)' <<< "${refresh_payload}")"; then
-            echo "::error::ingest:refresh did not report a valid remaining count"
-            exit 1
-          fi
-          echo "${REGISTRY}: ${remaining} tracked versions remain unchecked" >> "${GITHUB_STEP_SUMMARY}"
-          if [[ "${REGISTRY}" == "cratesio" && "${remaining}" -gt 0 ]]; then
-            echo "crates.io backfill remains in progress; publishing the durable cursor without a snapshot" \
-              >> "${GITHUB_STEP_SUMMARY}"
-          else
-            bundle exec rake "snapshot:take[${REGISTRY}]"
-          fi
-
-      - name: Align RubyGems history to weekly dumps
-        run: bash scripts/normalize-rubygems-weekly-snapshots.sh db/rakkan.sqlite
+        run: timeout --signal=TERM --kill-after=30s 70m bash scripts/refresh-registry-data.sh
 
       - name: Export refreshed D1 database
         run: bundle exec rake export:d1
 
+      - name: Preserve pre-refresh production backup
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rakkan-d1-backup-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/rakkan-d1-backup.sql
+            ${{ runner.temp }}/rakkan-d1-bookmark.txt
+            ${{ runner.temp }}/rakkan-d1-recovery.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Verify deployed Worker accepts candidate schema
+        if: github.event_name != 'push'
+        run: |
+          candidate_schema="$(jq -er '.version | select(type == "number")' site/schema-contract.json)"
+          health="$(curl --fail --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
+            https://rakkan.dev/health/v1.json)"
+          jq -e --argjson candidate_schema "${candidate_schema}" '
+            .status == "ok" and
+            (.compatibleVersions | type == "array" and length > 0) and
+            (.compatibleVersions | index($candidate_schema) != null)
+          ' <<< "${health}" >/dev/null
+
       - name: Replace production data
         if: github.event_name != 'push'
         working-directory: site
-        run: ./node_modules/.bin/wrangler d1 execute rakkan --remote --file=../db/d1_export.sql --yes
+        run: ./node_modules/.bin/wrangler d1 execute rakkan --remote --file=../db/d1_export.sql --yes > /dev/null
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
 
+      - name: Verify replacement
+        working-directory: site
+        run: |
+          expected_registries="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM registries;')"
+          expected_packages="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM packages;')"
+          expected_versions="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM package_versions;')"
+          expected_snapshots="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM adoption_snapshots;')"
+          result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
+            SELECT
+              (SELECT schema_version FROM export_meta LIMIT 1) AS schema_version,
+              (SELECT COUNT(*) FROM registries) AS registries,
+              (SELECT COUNT(*) FROM packages) AS packages,
+              (SELECT COUNT(*) FROM package_versions) AS package_versions,
+              (SELECT COUNT(*) FROM adoption_snapshots) AS adoption_snapshots
+          ')"
+          jq -e \
+            --argjson expected_schema "$(jq -er .version schema-contract.json)" \
+            --argjson expected_registries "${expected_registries}" \
+            --argjson expected_packages "${expected_packages}" \
+            --argjson expected_versions "${expected_versions}" \
+            --argjson expected_snapshots "${expected_snapshots}" '
+            .[0].results[0] |
+            .schema_version == $expected_schema and
+            .registries == $expected_registries and
+            .packages == $expected_packages and
+            .package_versions == $expected_versions and
+            .adoption_snapshots == $expected_snapshots
+          ' <<< "${result}" >/dev/null
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+
+  dry-run:
+    name: Dry-run registry data refresh
+    if: >-
+      github.repository == 'starhaven-io/rakkan' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      DATABASE_URL: sqlite://db/rakkan.sqlite
+      HANAMI_ENV: production
+      REFRESH_LIMIT: "250"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1.321.0
+        with:
+          bundler-cache: true
+
+      - name: Prepare fresh engine database
+        run: bundle exec hanami db prepare
+
+      - name: Exercise ingestion and export without production credentials
+        run: |
+          REGISTRY=rubygems timeout --signal=TERM --kill-after=30s 15m \
+            bash scripts/refresh-registry-data.sh
+          REGISTRY=cratesio timeout --signal=TERM --kill-after=30s 15m \
+            bash scripts/refresh-registry-data.sh
+          bundle exec rake export:d1
+
       - name: Report dry run
-        if: github.event_name == 'push'
-        run: echo "Ingestion and export completed as a dry run; production D1 was not replaced." >> "${GITHUB_STEP_SUMMARY}"
+        run: echo "Both registries ingested and exported without reading or replacing production D1." >> "${GITHUB_STEP_SUMMARY}"
 
   refresh-issue:
     name: Open/close refresh issue
     needs: refresh
-    if: ${{ always() && github.event_name != 'push' && (needs.refresh.result == 'success' || needs.refresh.result == 'failure') }}
+    if: ${{ always() && github.event_name != 'push' && (needs.refresh.result == 'success' || needs.refresh.result == 'failure' || needs.refresh.result == 'skipped' || needs.refresh.result == 'cancelled') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     continue-on-error: true # issue bookkeeping must not override the refresh result
@@ -248,16 +394,17 @@ jobs:
                 bookkeeping_status=1
               fi
             done <<< "${numbers}"
-          elif [ "${REFRESH_RESULT}" = "failure" ]; then
+          else
             number="${numbers%%$'\n'*}"
             if [ -n "${number}" ]; then
-              if ! retry_gh issue comment "${number}" --body "Refresh run failed: ${RUN_URL}" </dev/null; then
+              if ! retry_gh issue comment "${number}" \
+                  --body "Refresh run ${REFRESH_RESULT}: ${RUN_URL}" </dev/null; then
                 echo "::warning::failed to comment on refresh issue #${number}"
                 bookkeeping_status=1
               fi
             else
-              issue_body="$(printf 'Refresh run failed: %s\n\nFiled automatically by refresh-data.yml; the next successful refresh closes this issue.\n' \
-                "${RUN_URL}")"
+              issue_body="$(printf 'Refresh run %s: %s\n\nFiled automatically by refresh-data.yml; the next successful refresh closes this issue.\n' \
+                "${REFRESH_RESULT}" "${RUN_URL}")"
               if ! retry_gh issue create --title "${ISSUE_TITLE}" --body "${issue_body}" </dev/null; then
                 echo "::warning::failed to create refresh failure issue"
                 bookkeeping_status=1

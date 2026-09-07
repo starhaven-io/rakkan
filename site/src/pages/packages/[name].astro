@@ -5,10 +5,29 @@ import RegistryPackage from '../../components/RegistryPackage.astro';
 import { markRouteNotFound } from '../../lib/cache.ts';
 import { getDb } from '../../lib/db.ts';
 import { loadPackageDetail } from '../../lib/d1.ts';
+import { canonicalPageRedirect, parsePage } from '../../lib/pagination.ts';
+import { registrySite } from '../../lib/registries.ts';
 
 const name = Astro.params.name ?? '';
-const { registry, pkg, versions } = await loadPackageDetail(getDb(), 'rubygems', name);
+const requestedPage = parsePage(Astro.url.searchParams.get('page'));
+const { registry, pkg, versions, totalVersions, page, pageCount } = await loadPackageDetail(
+  getDb(),
+  'rubygems',
+  name,
+  requestedPage,
+);
 if (!registry || !pkg) markRouteNotFound(Astro.response);
+const redirect =
+  registry && pkg && canonicalPageRedirect(registrySite('rubygems').packagePath(name), requestedPage, page);
+if (redirect) return Astro.redirect(redirect);
 ---
 
-<RegistryPackage slug="rubygems" registry={registry} pkg={pkg} versions={versions} />
+<RegistryPackage
+  slug="rubygems"
+  registry={registry}
+  pkg={pkg}
+  versions={versions}
+  totalVersions={totalVersions}
+  page={page}
+  pageCount={pageCount}
+/>

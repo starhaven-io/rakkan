@@ -19,19 +19,21 @@ concurrency:
 jobs:
   update:
     name: Generate seed update
-    if: github.repository_owner == 'starhaven-io' && github.ref == 'refs/heads/main'
+    if: github.repository == 'starhaven-io/rakkan' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      pull-requests: read # required to compare a candidate with the existing automation PR
     outputs:
       base_sha: ${{ github.sha }}
-      update_required: ${{ steps.seed.outputs.update_required }}
+      update_required: ${{ steps.proposal.outputs.update_required }}
       dump_taken_at: ${{ steps.seed.outputs.dump_taken_at }}
       source_commit: ${{ steps.seed.outputs.source_commit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Setup Ruby
@@ -80,8 +82,10 @@ jobs:
           result="$(bundle exec ruby research/download_cratesio_dump.rb "${ARCHIVE}")"
           elapsed=$(( SECONDS - started ))
           bytes="$(jq -er '.bytes | select(type == "number" and . > 0)' <<< "${result}")"
+          archive_sha256="$(jq -er '.archive_sha256 | select(test("^[0-9a-f]{64}$"))' <<< "${result}")"
           test "$(stat --format=%s "${ARCHIVE}")" -eq "${bytes}"
           {
+            echo "archive_sha256=${archive_sha256}"
             echo "seconds=${elapsed}"
             echo "bytes=${bytes}"
           } >> "${GITHUB_OUTPUT}"
@@ -90,6 +94,7 @@ jobs:
             echo
             echo "- Elapsed: ${elapsed}s"
             echo "- Archive: ${bytes} bytes"
+            echo "- SHA-256: \`${archive_sha256}\`"
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Extract daily dump
@@ -97,7 +102,8 @@ jobs:
         run: |
           mkdir -p "${DUMP_DIR}"
           started="${SECONDS}"
-          tar --extract --gzip --file="${ARCHIVE}" --directory="${DUMP_DIR}" --strip-components=1
+          tar --extract --gzip --file="${ARCHIVE}" --directory="${DUMP_DIR}" \
+            --strip-components=1 --no-same-owner --no-same-permissions
           elapsed=$(( SECONDS - started ))
 
           test -f "${DUMP_DIR}/metadata.json"
@@ -124,10 +130,13 @@ jobs:
 
       - name: Build seed
         id: build
+        env:
+          ARCHIVE_SHA256: ${{ steps.download.outputs.archive_sha256 }}
         run: |
           started="${SECONDS}"
           /usr/bin/time --verbose --output="${BUILD_METRICS}" \
-            bundle exec ruby research/build_cratesio_seed.rb "${DUMP_DIR}" "${GENERATED_SEED}"
+            bundle exec ruby research/build_cratesio_seed.rb \
+              "${DUMP_DIR}" "${GENERATED_SEED}" "${ARCHIVE_SHA256}"
           elapsed=$(( SECONDS - started ))
 
           seed_bytes="$(du --bytes --summarize "${GENERATED_SEED}" | cut -f1)"
@@ -154,6 +163,7 @@ jobs:
         run: |
           result="$(bundle exec ruby research/check_cratesio_seed_update.rb seed/cratesio "${GENERATED_SEED}")"
           update_required="$(jq -er '.update_required | if . then "true" else "false" end' <<< "${result}")"
+          content_changed="$(jq -er '.content_changed | if . then "true" else "false" end' <<< "${result}")"
           dump_taken_at="$(jq -er '.dump_taken_at | select(type == "string")' <<< "${result}")"
           source_commit="$(jq -er '.source_commit | select(type == "string")' <<< "${result}")"
           packages="$(jq -er '.packages | select(type == "number" and . == 1000)' <<< "${result}")"
@@ -168,19 +178,34 @@ jobs:
           {
             echo "### Seed comparison complete"
             echo
-            echo "- Content changed: ${update_required}"
+            echo "- Update required: ${update_required}"
+            echo "- Tracked content changed: ${content_changed}"
             echo "- Tracked packages: ${packages}"
             echo "- Tracked versions: ${versions}"
           } >> "${GITHUB_STEP_SUMMARY}"
 
-      - name: Package seed candidate
+      - name: Check existing seed proposal
+        id: proposal
         if: steps.seed.outputs.update_required == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          update_required="$(bash scripts/seed-proposal-needed.sh \
+            cratesio "${GENERATED_SEED}" automation/cratesio-seed \
+            manifest.json top_1000.tsv tracked_versions.tsv.gz)"
+          echo "update_required=${update_required}" >> "${GITHUB_OUTPUT}"
+          if [[ "${update_required}" == "false" ]]; then
+            echo "An identical open crates.io seed pull request was left untouched." >> "${GITHUB_STEP_SUMMARY}"
+          fi
+
+      - name: Package seed candidate
+        if: steps.proposal.outputs.update_required == 'true'
         run: |
           tar --create --gzip --file="${RUNNER_TEMP}/cratesio-seed-candidate.tgz" \
             --directory="${GENERATED_SEED}" manifest.json top_1000.tsv tracked_versions.tsv.gz
 
       - name: Upload seed candidate
-        if: steps.seed.outputs.update_required == 'true'
+        if: steps.proposal.outputs.update_required == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cratesio-seed-candidate
@@ -270,7 +295,14 @@ jobs:
             echo "::error::seed candidate artifact contained unexpected entries"
             exit 1
           fi
-          tar --extract --gzip --file="${tgz}" --directory="${candidate}"
+          tar --extract --gzip --file="${tgz}" --directory="${candidate}" \
+            --no-same-owner --no-same-permissions
+          for name in manifest.json top_1000.tsv tracked_versions.tsv.gz; do
+            if [[ ! -f "${candidate}/${name}" || -L "${candidate}/${name}" ]]; then
+              echo "::error::seed candidate ${name} is not a regular file"
+              exit 1
+            fi
+          done
 
           # Re-run the freshness and comparison gate against the committed seed
           # so this job never publishes an artifact the gate did not approve.

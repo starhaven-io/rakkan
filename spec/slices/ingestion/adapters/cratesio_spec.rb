@@ -67,7 +67,6 @@ RSpec.describe Ingestion::Adapters::Cratesio do
       # The dump stamps nanoseconds; parsing must not round them away.
       expect(adapter.seed_as_of).to eq(Time.utc(2026, 8, 20, 2, 0, 21, Rational(810_126_238, 1000)))
       expect(adapter.provenance_seed_as_of).to be_nil
-      expect(adapter.snapshot_taken_on).to eq(Date.new(2026, 8, 20))
     end
 
     it "floors provenance checks at the trustpub_data migration" do
@@ -113,12 +112,12 @@ RSpec.describe Ingestion::Adapters::Cratesio do
     expect(provenance).to be_nil
   end
 
-  it "returns nil when a version no longer exists" do
+  it "does not turn a missing version into a negative provenance observation" do
     responses["https://crates.io/api/v1/crates/removed/1.0.0"] = nil
 
-    provenance = adapter.fetch_provenance(name: "removed", number: "1.0.0", platform: "")
-
-    expect(provenance).to be_nil
+    expect { adapter.fetch_provenance(name: "removed", number: "1.0.0", platform: "") }
+      .to raise_error(Ingestion::HTTPClient::NotFoundError)
+    expect(client.allow_not_founds.last).to be(false)
   end
 
   it "checks several versions of one crate with one API request" do
@@ -129,11 +128,11 @@ RSpec.describe Ingestion::Adapters::Cratesio do
     results = adapter.each_provenance(name: "cargo-semver-checks", versions:).to_a
 
     expect(results.map(&:first)).to eq(versions)
-    expect(results.first.last).to include(
+    expect(results.first[1]).to include(
       provenance_kind: "trustpub_metadata",
       source_repository: "https://github.com/obi1kenobi/cargo-semver-checks"
     )
-    expect(results.last.last).to be_nil
+    expect(results.last).to eq([versions.last, nil, nil])
     expect(client.requests.last).to eq(url)
     expect(client.ttls.last).to eq(0)
   end
@@ -147,7 +146,7 @@ RSpec.describe Ingestion::Adapters::Cratesio do
 
     results = adapter.each_provenance(name: "cargo-semver-checks", versions:).to_a
 
-    expect(results).to eq([[versions.first, nil]])
+    expect(results).to eq([[versions.first, nil, nil]])
     expect(client.requests.last(2)).to eq([batch_url, version_url])
   end
 
@@ -160,8 +159,11 @@ RSpec.describe Ingestion::Adapters::Cratesio do
 
     results = adapter.each_provenance(name: "removed", versions:).to_a
 
-    expect(results).to eq([[versions.first, nil]])
+    expect(results.first.first).to eq(versions.first)
+    expect(results.first[1]).to be_nil
+    expect(results.first[2]).to be_a(Ingestion::HTTPClient::NotFoundError)
     expect(client.requests.last(2)).to eq([batch_url, version_url])
+    expect(client.allow_not_founds.last(2)).to eq([true, false])
   end
 
   it "falls back when a batch contains malformed version entries" do
@@ -173,7 +175,7 @@ RSpec.describe Ingestion::Adapters::Cratesio do
 
     results = adapter.each_provenance(name: "example", versions:).to_a
 
-    expect(results).to eq([[versions.first, nil]])
+    expect(results).to eq([[versions.first, nil, nil]])
     expect(client.requests.last(2)).to eq([batch_url, version_url])
   end
 
@@ -226,13 +228,22 @@ RSpec.describe Ingestion::Adapters::Cratesio do
     )
   end
 
-  it "returns nil for unstable trusted-publishing metadata shapes" do
+  it "fails closed on malformed non-null trusted-publishing metadata" do
     url = "https://crates.io/api/v1/crates/example/1.0.0"
 
     ["unexpected", {}, { "repository" => "owner/example" }].each do |trustpub_data|
       responses[url] = { "version" => { "trustpub_data" => trustpub_data } }
 
-      expect(adapter.fetch_provenance(name: "example", number: "1.0.0", platform: "rust")).to be_nil
+      expect { adapter.fetch_provenance(name: "example", number: "1.0.0", platform: "rust") }
+        .to raise_error(Ingestion::HTTPClient::Error, /trustpub_data/)
     end
+  end
+
+  it "fails closed on a malformed successful version response" do
+    url = "https://crates.io/api/v1/crates/example/1.0.0"
+    responses[url] = {}
+
+    expect { adapter.fetch_provenance(name: "example", number: "1.0.0", platform: "rust") }
+      .to raise_error(Ingestion::HTTPClient::Error, /version object/)
   end
 end

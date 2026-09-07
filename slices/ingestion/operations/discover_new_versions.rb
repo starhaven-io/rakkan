@@ -31,7 +31,8 @@ module Ingestion
         return { error: "unknown registry #{adapter.registry_slug}" } unless registry
 
         now = Time.now.utc
-        from ||= default_from(registry)
+        from = whole_second(from || default_from(registry))
+        to = whole_second(to)
         tracked = packages.tracked.where(registry_id: registry.id)
                           .select(:id, :name).to_a.to_h { |p| [p[:name], p[:id]] }
 
@@ -43,6 +44,7 @@ module Ingestion
         while cursor < to && pages_left.positive?
           window_end = [cursor + MAX_WINDOW, to].min
           batch = adapter.new_versions(from: cursor, to: window_end, max_pages: pages_left)
+          validate_batch!(batch, from: cursor, to: window_end, max_pages: pages_left)
           pages_left -= [batch[:pages], 1].max
 
           batch[:entries].each do |v|
@@ -68,9 +70,44 @@ module Ingestion
 
       private
 
+      # RubyGems' timeframe API accepts timestamps only to whole-second
+      # precision. Use that same precision for validation and cursor storage
+      # so a valid entry from the transmitted boundary cannot be rejected.
+      def whole_second(time)
+        Time.at(time.to_i).utc
+      end
+
       def default_from(registry)
         synced = registry.feed_synced_at
         synced ? synced.to_time - OVERLAP : Time.now.utc - MAX_WINDOW
+      end
+
+      def validate_batch!(batch, from:, to:, max_pages:)
+        raise ArgumentError, "version feed result must be an object" unless batch.is_a?(Hash)
+
+        entries = batch[:entries]
+        pages = batch[:pages]
+        drained = batch[:drained]
+        raise ArgumentError, "version feed entries must be an array" unless entries.is_a?(Array)
+        unless pages.is_a?(Integer) && pages.between?(0, max_pages)
+          raise ArgumentError, "version feed page count is outside the requested budget"
+        end
+        raise ArgumentError, "version feed drained flag must be boolean" unless [true, false].include?(drained)
+
+        published = entries.map do |entry|
+          raise ArgumentError, "version feed entry must be an object" unless entry.is_a?(Hash)
+
+          timestamp = entry[:published_at]
+          unless timestamp.is_a?(Time) && timestamp.between?(from, to)
+            raise ArgumentError, "version feed entry is outside the requested window"
+          end
+
+          timestamp
+        end
+        raise ArgumentError, "version feed entries must be ordered" unless published.each_cons(2).all? { |a, b| a <= b }
+        return unless !drained && (published.empty? || published.max <= from)
+
+        raise ArgumentError, "page-limited version feed made no cursor progress"
       end
 
       def upsert_version(package_id, entry, now)

@@ -17,7 +17,7 @@ over assuming framework APIs.
 ## Project overview
 
 - **Stack:** two halves. The engine is headless Ruby (developed on 4.0.6):
-  Hanami 3.0.1 as container/persistence (ROM/Sequel on SQLite) driving
+  Hanami 3.0.2 as container/persistence (ROM/Sequel on SQLite) driving
   ingestion via rake tasks; it has no web server. `site/` is the public web
   tier: Astro SSR on Cloudflare Workers reading D1,
   fed by `rake export:d1`. D1 is SQLite, so the export reuses the engine
@@ -36,8 +36,9 @@ over assuming framework APIs.
 
 ## Commands
 
-- `just check`: the common entry point. Engine specs, RuboCop, site unit
-  tests, an Astro production build, plus optional typos.
+- `just check`: the common entry point. Engine and site coverage gates,
+  RuboCop, ShellCheck, Prettier, Astro type checking and production build,
+  actionlint, zizmor, pinprick, npm install policy, and typos.
 - `bin/setup && just dev`: fresh-clone path to the running site on real
   data (engine deps, databases, seed, site deps, local D1; no network
   beyond package installs). Piecemeal equivalents live in the justfile

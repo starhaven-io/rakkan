@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "date"
 require "json"
 
 # Ingestion entry points. Each task boots the app and calls one operation in
@@ -70,6 +71,17 @@ module IngestionTaskSupport
       key.delete_prefix("adapters.") if key.match?(/\Aadapters\.[^.]+\z/)
     end.sort
   end
+
+  def utc_date(value)
+    return Time.now.utc.to_date unless value
+
+    date = Date.iso8601(value.to_s)
+    return date if date.iso8601 == value
+
+    raise Date::Error
+  rescue Date::Error
+    raise ArgumentError, %(invalid UTC run date "#{value}"; expected YYYY-MM-DD), cause: nil
+  end
 end
 
 namespace :ingest do
@@ -93,28 +105,34 @@ namespace :ingest do
     puts result.inspect
   end
 
-  desc "Check provenance for unchecked versions (live API; LIMIT caps live checks)"
-  task :refresh, %i[limit registry] do |_task, args|
+  desc "Check provenance (live API; LIMIT caps ordinary checks, not exact waiver probes)"
+  task :refresh, %i[limit registry run_date] do |_task, args|
     require "hanami/boot"
     limit = (args[:limit] || 50).to_i
     adapter = IngestionTaskSupport.adapter(args[:registry])
+    run_date = IngestionTaskSupport.utc_date(args[:run_date])
     result = IngestionTaskSupport.call(
-      "ingest:refresh", "operations.refresh_provenance", adapter:, limit:
+      "ingest:refresh", "operations.refresh_provenance", adapter:, limit:, waiver_date: run_date
     )
     puts JSON.generate(result.value!)
   end
 end
 
 namespace :snapshot do
+  desc "Remove known RubyGems observations mislabeled by the former normalization step"
+  task :repair_rubygems_history do
+    require "hanami/boot"
+    result = Ingestion::Slice["operations.repair_rubygems_snapshots"].call
+    puts JSON.generate(result.value!)
+  end
+
   desc "Record today's adoption snapshot"
-  task :take, [:registry] do |_task, args|
+  task :take, %i[registry run_date] do |_task, args|
     require "hanami/boot"
     adapter = IngestionTaskSupport.adapter(args[:registry])
-    snapshot_args = { registry_name: adapter.registry_slug }
-    taken_on = adapter.snapshot_taken_on
-    snapshot_args[:taken_on] = taken_on if taken_on
+    run_date = IngestionTaskSupport.utc_date(args[:run_date])
     result = Ingestion::Slice["operations.take_snapshot"].call(
-      **snapshot_args
+      registry_name: adapter.registry_slug, taken_on: run_date, waiver_date: run_date
     )
     puts result.inspect
   end

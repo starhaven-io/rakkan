@@ -7,6 +7,7 @@ if ENV["COVERAGE"] == "true"
   SimpleCov.start do
     enable_coverage :branch
     cover "{app,lib,slices}/**/*.rb", "lib/tasks/*.rake"
+    minimum_coverage line: 90, branch: 75
     formatter SimpleCov::Formatter::CoberturaFormatter
   end
 end

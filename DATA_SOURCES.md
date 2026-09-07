@@ -1,6 +1,8 @@
 # Data sources for trusted publishing adoption
 
-Investigated 2026-08-14 and expanded for crates.io and PyPI on 2026-08-19.
+Investigated 2026-08-14, expanded for crates.io and PyPI on 2026-08-19, and
+revalidated against the automated RubyGems and crates.io dump paths on
+2026-09-07.
 Recorded samples live in `research/samples/`; distilled offline fixtures live
 in `spec/fixtures/`; the scripts behind the dump-derived numbers live in
 `research/`. RubyGems registry state referenced throughout is the weekly dump
@@ -10,6 +12,15 @@ codes or headers (statuses were observed at probe time), and the raw dump is
 not retained; dump-derived claims are reproducible from a fresh dump via the
 scripts, not from the committed artifacts alone.
 
+Those dated counts are a historical baseline, not the current public value.
+Each committed seed's `manifest.json` is authoritative for its current source,
+dump timestamp, and source checksum or source commit. The RubyGems seed was
+rebuilt from the official 2026-08-31 archive during the 2026-09-06
+revalidation; its exact URL and SHA-256 are recorded in that manifest.
+The crates.io seed was rebuilt from the official 2026-09-07 archive during the
+same revalidation; its exact archive SHA-256 and source commit are recorded in
+its manifest.
+
 ## Summary and recommendation
 
 The trusted publishing / provenance signal for RubyGems is **available from
@@ -17,7 +28,7 @@ public JSON APIs and from the weekly data dump**. No HTML scraping is needed
 for any part of the pipeline. The recommended ingestion path is:
 
 1. **Backfill + tracked set (weekly):** the official PostgreSQL dump. One
-   ~650 MB download per week yields download counts (top-N definition), all
+   roughly 650 MB download per week yields download counts (top-N definition), all
    versions, and the complete `attestations` table (11,926 rows covering
    11,920 distinct attested versions registry-wide as of 2026-08-10). COPY
    blocks are plain TSV, so a streaming parser suffices; no Postgres server
@@ -32,7 +43,7 @@ for any part of the pipeline. The recommended ingestion path is:
    sigstore bundle (stdlib OpenSSL; extension OIDs `1.3.6.1.4.1.57264.1.*`)
    to get issuer, source repo, workflow, commit, and run URL.
 
-Headline baseline from the 2026-08-10 dump: **96 of the top 1,000 gems by
+Historical baseline from the 2026-08-10 dump: **96 of the top 1,000 gems by
 downloads (9.6%) have at least one attested version**; 664 of their 104,587
 indexed version rows are attested.
 
@@ -70,6 +81,15 @@ SHA, run URL, `github-hosted` runner. These become real schema columns.
 public_postgresql.tar`, ~650 MB; listing samples saved). The tar holds one
 plain-format `PostgreSQL.sql.gz`; COPY blocks are TSV, parsed by streaming
 (`research/extract_dump.rb`) without a Postgres install.
+
+`research/download_rubygems_dump.rb` lists only the current and previous month,
+accepts only STANDARD objects matching the exact dump-key pattern, enforces a
+2 GB ceiling, and verifies the downloaded byte count against the S3 listing.
+The builder records the archive SHA-256. Extractors bind COPY fields by their
+declared column names and reject missing columns, row-width drift, duplicate
+identifiers, dangling references, and unterminated data. The semantic checker
+also validates ranking, timestamps, booleans, JSON attestation bodies, and
+decompressed content before an update can be proposed.
 
 Tables present: `rubygems`, `versions`, `dependencies`, `gem_downloads`,
 `linksets`, `deletions`, and, decisively, **`attestations`
@@ -113,7 +133,13 @@ rack-attack limits on auth-ish endpoints (not relevant here). Client policy
 adopted: identifying User-Agent, ≤4 req/s, exponential backoff on 429/5xx,
 on-disk response cache (feed pages are served from cache on rerun;
 provenance checks deliberately bypass cache reads to observe current
-state).
+state), HTTPS endpoint validation, bounded JSON bodies, and atomic cache
+writes. Unexpected 404s and malformed responses fail rather than becoming
+negative provenance observations. A source-controlled, exact, expiring waiver
+can exclude one persistently absent non-yanked version from a complete
+observation without stamping it or claiming that it lacks provenance. The
+waiver set is capped at 100 and probed separately from the ordinary refresh
+limit so exceptions cannot crowd out normal checks.
 
 ## deps.dev (corroborating source)
 
@@ -144,8 +170,9 @@ is not on the primary path.
   The adapter therefore maps only the small provider/repository/run/SHA shape
   evidenced in the recorded samples and does not persist the raw object as a
   stable contract.
-- The daily database dump at `static.crates.io/db-dump.tar.gz` was inspected
-  on 2026-08-20. Its metadata identifies the cut time and crates.io source
+- The daily database dump at `static.crates.io/db-dump.tar.gz` was initially
+  inspected on 2026-08-20 and revalidated on 2026-09-07. Its metadata
+  identifies the cut time and crates.io source
   commit; `crate_downloads.csv`, `crates.csv`, `default_versions.csv`, and
   `versions.csv` are sufficient to reproduce a total-download top 1,000 and
   its version history. The export does not include `trustpub_data`, trusted
@@ -159,14 +186,16 @@ is not on the primary path.
 - `research/download_cratesio_dump.rb` streams the official archive through
   `Ingestion::HTTPClient`, preserving its identifying User-Agent, throttle, and
   retry policy without buffering the dump in memory. The client follows the
-  official endpoint's allowlisted HTTPS redirect to crates.io's CDN.
+  official endpoint's allowlisted HTTPS redirect to crates.io's CDN and records
+  the downloaded archive's SHA-256.
   `research/build_cratesio_seed.rb` then performs the ranking and version
   distillation, and `seed/cratesio/` holds its top-1,000 output. Rebuilding from
   the same dump on the same toolchain reproduces those files byte for byte;
   across toolchains the guarantee is the decompressed content, since the gzip
-  container records a platform code. A Monday workflow compares that semantic
-  content with the committed seed and updates an automation branch only when it
-  changes. The dump is daily, so this reviewed weekly re-seeding is also the
+  container records a platform code. A Monday workflow compares semantic
+  content and exact source identity with the committed seed, advancing the
+  manifest for every newer official dump even when the tracked rows are unchanged.
+  The dump is daily, so this reviewed weekly re-seeding is also the
   registry's discovery path and no live feed walk is needed.
 - A top-1,000 backfill is bounded by publish date rather than by crawling
   every version. `trustpub_data` arrived in the

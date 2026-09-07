@@ -11,37 +11,33 @@ install-site:
 
 # Create and migrate the development and test databases
 db-prepare:
-    bundle exec hanami db prepare
+    HANAMI_LOG_LEVEL=info bundle exec hanami db prepare
 
 # Data
 
 # Load a registry's tracked set from committed seed data (no network; idempotent)
 seed registry="rubygems":
-    bundle exec rake "ingest:seed[{{ registry }}]"
+    HANAMI_LOG_LEVEL=info bundle exec rake "ingest:seed[{{ registry }}]"
 
 # Discover versions published since a registry's seed dump (live API)
 discover registry="rubygems":
-    bundle exec rake "ingest:discover[{{ registry }}]"
+    HANAMI_LOG_LEVEL=info bundle exec rake "ingest:discover[{{ registry }}]"
 
-# Check provenance for up to N unchecked versions in a registry (live API)
+# Check up to N ordinary versions plus bounded exact waiver probes (live API)
 refresh n="50" registry="rubygems":
-    bundle exec rake "ingest:refresh[{{ n }},{{ registry }}]"
+    HANAMI_LOG_LEVEL=info bundle exec rake "ingest:refresh[{{ n }},{{ registry }}]"
 
 # Record the current adoption snapshot for a registry
 snapshot registry="rubygems":
-    bundle exec rake "snapshot:take[{{ registry }}]"
-
-# Align RubyGems observations to the registry's weekly dump dates
-normalize-snapshots database="db/rakkan.sqlite":
-    bash scripts/normalize-rubygems-weekly-snapshots.sh "{{ database }}"
+    HANAMI_LOG_LEVEL=info bundle exec rake "snapshot:take[{{ registry }}]"
 
 # Export the database for the Workers site's D1 (db/d1_export.sql)
 export-d1:
-    bundle exec rake export:d1
+    HANAMI_LOG_LEVEL=info bundle exec rake export:d1
 
 # Load the export into the site's local D1 (requires `just install-site`)
-site-db: normalize-snapshots export-d1
-    cd site && ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql
+site-db: export-d1
+    cd site && WRANGLER_WRITE_LOGS=false ./node_modules/.bin/wrangler d1 execute rakkan --local --file=../db/d1_export.sql > /dev/null
 
 # Run
 
@@ -59,6 +55,15 @@ console:
 test:
     bundle exec rspec
 
+# Validate committed tracked sets structurally; protected refreshes enforce freshness
+check-seeds:
+    bundle exec ruby research/check_rubygems_seed_update.rb --structural seed/rubygems
+    bundle exec ruby research/check_cratesio_seed_update.rb --structural seed/cratesio
+
+# Check external executables required by the complete local gate
+check-tools:
+    bash scripts/check-tools.sh
+
 # Run all test suites and write the Codecov coverage reports
 test-cov:
     COVERAGE=true bundle exec rspec
@@ -68,7 +73,7 @@ test-cov:
 
 # Lint Ruby style
 rubocop:
-    bundle exec rubocop
+    bundle exec rubocop --cache-root var/cache/rubocop
 
 # Format site files with Prettier
 site-format:
@@ -101,9 +106,24 @@ check:
         echo "--- $1 --- skipped ($2 not found)"
         skipped+=("$2 (brew install $3)")
     }
+    run_tool() {
+        local name="$1" tool="$2" package="$3"
+        shift 3
+        if command -v "$tool" >/dev/null 2>&1; then
+            run "$name" "$@"
+        else
+            skip "$name" "$tool" "$package"
+        fi
+    }
+    run tools just check-tools
     run npm-policy node scripts/check-npm-install-policy.mjs site
+    run seeds just check-seeds
     run rspec env COVERAGE=true bundle exec rspec
-    run rubocop bundle exec rubocop
+    run rubocop bundle exec rubocop --cache-root var/cache/rubocop
+    run_tool shellcheck shellcheck shellcheck shellcheck bin/setup scripts/*.sh
+    run_tool actionlint actionlint actionlint actionlint
+    run_tool zizmor zizmor zizmor zizmor --persona auditor .github/workflows/
+    run_tool pinprick pinprick pinprick pinprick audit .
     if [ -d site/node_modules ]; then
         run site-format bash -c 'cd site && npm run --silent format:check'
         run site-check bash -c 'cd site && npm run --silent check'
@@ -112,11 +132,7 @@ check:
     else
         skip site-tests node_modules "just install-site"
     fi
-    if command -v typos &>/dev/null; then
-        run typos typos
-    else
-        skip typos typos typos-cli
-    fi
+    run_tool typos typos typos-cli typos
     if [ ${#skipped[@]} -gt 0 ]; then
         echo ""
         echo "Checks skipped due to missing tools:"
@@ -129,7 +145,7 @@ check:
 
 # Check documentation links
 lychee:
-    lychee --config lychee.toml README.md DATA_SOURCES.md seed/README.md
+    lychee --config lychee.toml README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md seed/README.md docs/architecture.md docs/data-freshness.md docs/operations.md docs/adr/0001-registry-accepted-provenance.md docs/adr/0002-reviewed-seed-publication.md docs/adr/0003-d1-replacement.md
 
 # fleet:block install-hooks
 # Install git hooks (AI trailer guard + DCO sign-off + pre-push checks). Run once per clone.

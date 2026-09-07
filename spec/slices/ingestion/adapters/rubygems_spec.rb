@@ -79,10 +79,26 @@ RSpec.describe Ingestion::Adapters::Rubygems do
       expect(client.requests.last).to end_with("psych-5.4.0-java.json")
     end
 
+    it "encodes the attestation filename as one path segment" do
+      encoded = "gem%2Fname-1.0%2Bmeta-platform%20name"
+      responses["https://rubygems.org/api/v1/attestations/#{encoded}.json"] = []
+
+      adapter.fetch_provenance(name: "gem/name", number: "1.0+meta", platform: "platform name")
+
+      expect(client.requests.last).to end_with("/attestations/#{encoded}.json")
+    end
+
     it "bypasses the read cache so checks observe current state" do
       adapter.fetch_provenance(name: "rack", number: "3.2.7", platform: "ruby")
 
       expect(client.ttls.last).to eq(0)
+    end
+
+    it "rejects a malformed attestations response instead of recording a negative" do
+      responses["https://rubygems.org/api/v1/attestations/rack-3.2.7.json"] = {}
+
+      expect { adapter.fetch_provenance(name: "rack", number: "3.2.7", platform: "ruby") }
+        .to raise_error(Ingestion::HTTPClient::Error, /must be an array/)
     end
   end
 
@@ -90,11 +106,12 @@ RSpec.describe Ingestion::Adapters::Rubygems do
     let(:from) { Time.utc(2026, 8, 12) }
     let(:to) { Time.utc(2026, 8, 13) }
     let(:base) { "https://rubygems.org/api/v1/timeframe_versions.json" }
+    let(:query) { URI.encode_www_form(from: from.iso8601, to: to.iso8601) }
     let(:responses) do
       {
-        "#{base}?from=#{from.iso8601}&to=#{to.iso8601}&page=1" =>
+        "#{base}?#{query}&page=1" =>
           json_fixture("v1_timeframe_versions_sample.json"),
-        "#{base}?from=#{from.iso8601}&to=#{to.iso8601}&page=2" => []
+        "#{base}?#{query}&page=2" => []
       }
     end
 
@@ -116,6 +133,29 @@ RSpec.describe Ingestion::Adapters::Rubygems do
       expect(client.requests.size).to eq(1)
       expect(result[:drained]).to be(false)
       expect(result[:entries].size).to eq(30)
+    end
+
+    it "rejects malformed, unordered, and out-of-window feed data" do
+      page = "#{base}?#{query}&page=1"
+      responses[page] = {}
+      expect { adapter.new_versions(from:, to:, max_pages: 1) }
+        .to raise_error(Ingestion::HTTPClient::Error, /must be an array/)
+
+      responses[page] = [
+        { "name" => "rack", "number" => "3.2.0", "platform" => "ruby",
+          "created_at" => "2026-08-12T02:00:00Z", "prerelease" => false },
+        { "name" => "rack", "number" => "3.1.0", "platform" => "ruby",
+          "created_at" => "2026-08-12T01:00:00Z", "prerelease" => false }
+      ]
+      expect { adapter.new_versions(from:, to:, max_pages: 1) }
+        .to raise_error(Ingestion::HTTPClient::Error, /not ordered/)
+
+      responses[page] = [
+        { "name" => "rack", "number" => "4.0.0", "platform" => "ruby",
+          "created_at" => "2026-08-14T00:00:00Z", "prerelease" => false }
+      ]
+      expect { adapter.new_versions(from:, to:, max_pages: 1) }
+        .to raise_error(Ingestion::HTTPClient::Error, /outside the requested window/)
     end
   end
 end

@@ -5,7 +5,15 @@ import { DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlit
 
 import {
   allTracked,
+  compatibilityPayload,
+  COMPATIBLE_SCHEMA_VERSIONS,
+  EXPECTED_SCHEMA_VERSION,
+  ExportUnavailableError,
   exportGeneratedAt,
+  exportMetadata,
+  healthPayload,
+  LEGACY_SCHEMA_VERSION,
+  SchemaVersionError,
   latestSnapshot,
   loadPackageDetail,
   packageByName,
@@ -13,7 +21,10 @@ import {
   registryByName,
   searchPackages,
   snapshotSeries,
+  trackedPage,
+  trackedSummary,
   topPackages,
+  versionsPage,
   versionsOf,
   type D1,
   type D1PreparedStatement,
@@ -47,8 +58,8 @@ class SqliteD1 implements D1 {
   constructor() {
     this.sqlite.exec(readFileSync(new URL('../../config/db/structure.sql', import.meta.url), 'utf8'));
     this.sqlite.exec(`
-      CREATE TABLE export_meta (generated_at TEXT NOT NULL);
-      INSERT INTO export_meta VALUES ('2026-08-22 17:28:00');
+      CREATE TABLE export_meta (generated_at TEXT NOT NULL, schema_version INTEGER NOT NULL);
+      INSERT INTO export_meta VALUES ('2026-08-22 17:28:00', ${EXPECTED_SCHEMA_VERSION});
       INSERT INTO registries
         (id, name, display_name, url, feed_synced_at, created_at, updated_at)
       VALUES
@@ -113,7 +124,84 @@ test('metadata and registry lookups preserve missing-row semantics', async (t) =
   );
   assert.equal(await registryByName(db, 'missing'), null);
   db.sqlite.exec('DELETE FROM export_meta');
-  assert.equal(await exportGeneratedAt(db), null);
+  await assert.rejects(() => exportGeneratedAt(db), ExportUnavailableError);
+});
+
+test('metadata lookup fails closed on an incompatible D1 schema contract', async (t) => {
+  const db = database(t);
+  db.sqlite.exec(`UPDATE export_meta SET schema_version = ${EXPECTED_SCHEMA_VERSION + 1}`);
+
+  await assert.rejects(() => exportGeneratedAt(db), SchemaVersionError);
+});
+
+test('metadata lookup rejects unrecognized columns even when the version is compatible', async (t) => {
+  const db = database(t);
+  db.sqlite.exec('ALTER TABLE export_meta ADD COLUMN unexpected TEXT');
+
+  await assert.rejects(() => exportMetadata(db), SchemaVersionError);
+});
+
+test('metadata compatibility sets support an N to N+1 rollout bridge', async (t) => {
+  const db = database(t);
+  db.sqlite.exec(`UPDATE export_meta SET schema_version = ${EXPECTED_SCHEMA_VERSION + 1}`);
+
+  const metadata = await exportMetadata(db, [EXPECTED_SCHEMA_VERSION, EXPECTED_SCHEMA_VERSION + 1]);
+
+  assert.equal(metadata.schema_version, EXPECTED_SCHEMA_VERSION + 1);
+  assert.ok(COMPATIBLE_SCHEMA_VERSIONS.includes(EXPECTED_SCHEMA_VERSION));
+});
+
+test('metadata recognizes only the exact legacy unversioned export as schema 1', async (t) => {
+  const db = database(t);
+  db.sqlite.exec('DROP TABLE export_meta; CREATE TABLE export_meta (generated_at TEXT NOT NULL);');
+  db.sqlite.exec("INSERT INTO export_meta VALUES ('2026-08-22 17:28:00')");
+
+  assert.deepEqual(
+    { ...(await exportMetadata(db)) },
+    {
+      generated_at: '2026-08-22 17:28:00',
+      schema_version: LEGACY_SCHEMA_VERSION,
+    },
+  );
+
+  db.sqlite.exec('ALTER TABLE export_meta ADD COLUMN unexpected TEXT');
+  await assert.rejects(() => exportMetadata(db), SchemaVersionError);
+});
+
+test('health metadata advertises the deployed Worker compatibility set', async (t) => {
+  const db = database(t);
+
+  assert.deepEqual(healthPayload(await exportMetadata(db)), {
+    status: 'ok',
+    schemaVersion: EXPECTED_SCHEMA_VERSION,
+    compatibleVersions: [...COMPATIBLE_SCHEMA_VERSIONS],
+    generatedAt: '2026-08-22 17:28:00',
+  });
+  assert.deepEqual(compatibilityPayload(), {
+    status: 'ok',
+    compatibleVersions: [...COMPATIBLE_SCHEMA_VERSIONS],
+  });
+});
+
+test('metadata lookup fails closed on missing columns, invalid generations, and a missing table', async (t) => {
+  const db = database(t);
+  db.sqlite.exec(
+    'DROP TABLE export_meta; CREATE TABLE export_meta (generated_at TEXT NOT NULL, schema_version INTEGER);',
+  );
+  db.sqlite.exec("INSERT INTO export_meta VALUES ('2026-08-22 17:28:00', NULL)");
+  await assert.rejects(() => exportGeneratedAt(db), SchemaVersionError);
+
+  db.sqlite.exec(
+    'DROP TABLE export_meta; CREATE TABLE export_meta (generated_at TEXT NOT NULL, schema_version INTEGER NOT NULL);',
+  );
+  db.sqlite.exec(`INSERT INTO export_meta VALUES ('not-a-timestamp', ${EXPECTED_SCHEMA_VERSION})`);
+  await assert.rejects(() => exportGeneratedAt(db), SchemaVersionError);
+
+  db.sqlite.exec('DROP TABLE export_meta');
+  await assert.rejects(() => exportGeneratedAt(db), ExportUnavailableError);
+
+  db.sqlite.exec('CREATE TABLE export_meta (generated_at TEXT NOT NULL, schema_version INTEGER NOT NULL)');
+  await assert.rejects(() => exportGeneratedAt(db), ExportUnavailableError);
 });
 
 test('snapshot queries stay registry-scoped and newest-first', async (t) => {
@@ -146,6 +234,14 @@ test('package lists enforce tracking, ordering, and registry boundaries', async 
   );
   assert.equal((await packageByName(db, 1, 'rack-retired'))?.tracked, 0);
   assert.equal(await packageByName(db, 2, 'rack-retired'), null);
+  assert.deepEqual({ ...(await trackedSummary(db, 1)) }, { total: 2, provenant: 2 });
+  const secondPage = await trackedPage(db, 1, 2, 1);
+  assert.equal(secondPage.total, 2);
+  assert.equal(secondPage.pageCount, 2);
+  assert.deepEqual(
+    secondPage.items.map((pkg) => pkg.name),
+    ['rack%literal'],
+  );
 });
 
 test('version and search queries execute against the exported SQLite shape', async (t) => {
@@ -158,6 +254,13 @@ test('version and search queries execute against the exported SQLite shape', asy
   assert.deepEqual(
     (await versionsOf(db, 2, 'rack-main')).map((version) => version.number),
     ['3.0.0'],
+  );
+  const secondPage = await versionsPage(db, 1, 'rack-main', 2, 1);
+  assert.equal(secondPage.total, 2);
+  assert.equal(secondPage.pageCount, 2);
+  assert.deepEqual(
+    secondPage.items.map((version) => version.number),
+    ['1.0.0'],
   );
   assert.deepEqual(
     (await searchPackages(db, 1, 'rack%', 10)).map((pkg) => pkg.name),
@@ -195,5 +298,12 @@ test('package detail loading keeps package and versions inside one registry', as
   );
   assert.equal(missingPackage.pkg, null);
   assert.deepEqual(missingPackage.versions, []);
-  assert.deepEqual(missingRegistry, { registry: null, pkg: null, versions: [] });
+  assert.deepEqual(missingRegistry, {
+    registry: null,
+    pkg: null,
+    versions: [],
+    totalVersions: 0,
+    page: 1,
+    pageCount: 1,
+  });
 });
