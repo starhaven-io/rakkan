@@ -1,6 +1,6 @@
 # Code of conduct
 
-Rakkan contributors and maintainers are expected to make participation safe,
+Rakkan contributors and the maintainer are expected to make participation safe,
 respectful, and productive.
 
 ## Expected behavior
@@ -16,12 +16,11 @@ in project spaces or when representing the project.
 
 ## Enforcement
 
-Maintainers may edit or remove contributions, restrict participation, or ban a
+The maintainer may edit or remove contributions, restrict participation, or ban a
 participant when necessary. Decisions should consider context, impact, prior
 behavior, and the safety of affected people.
 
-Use GitHub's private abuse-reporting controls for conduct on GitHub. For other
-project spaces, report the incident privately to the maintainers through the
-contact channel published by the Starhaven organization. Do not put sensitive
-details in a public issue. Reports will be handled as privately as practical;
-conflicts of interest will be recused.
+Use GitHub's private abuse-reporting controls for conduct on GitHub, including
+reports concerning the maintainer. For other project spaces, use that platform's
+private abuse-reporting controls. Do not put sensitive details in a public issue.
+The project has one maintainer and cannot promise an independent internal reviewer.

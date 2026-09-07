@@ -38,6 +38,7 @@ kept_versions = by_gem.values.flat_map do |rs|
   rs.sort_by { |l| l.split("\t")[4] }.last(VERSIONS_PER_GEM)
 end
 Zlib::GzipWriter.open(File.join(FIXTURES, "seed", "rubygems", "tracked_versions.tsv.gz")) do |gz|
+  gz.mtime = 0
   gz.write(vheader)
   kept_versions.each { |l| gz.write(l) }
 end
@@ -49,6 +50,7 @@ alines = Zlib::GzipReader.open(File.join(SEED, "tracked_attestations.tsv.gz"), &
 aheader, *arows = alines
 kept_atts = arows.select { |l| kept_version_ids[l.split("\t")[1]] }
 Zlib::GzipWriter.open(File.join(FIXTURES, "seed", "rubygems", "tracked_attestations.tsv.gz")) do |gz|
+  gz.mtime = 0
   gz.write(aheader)
   kept_atts.each { |l| gz.write(l) }
 end

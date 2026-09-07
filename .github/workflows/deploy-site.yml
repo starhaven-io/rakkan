@@ -36,8 +36,6 @@ jobs:
     environment:
       name: cloudflare-d1-read
       deployment: false
-    outputs:
-      legacy_export: ${{ steps.contract.outputs.legacy_export }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -57,7 +55,6 @@ jobs:
         run: npm ci --strict-allow-scripts
 
       - name: Verify deployed schema compatibility
-        id: contract
         working-directory: site
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_READ_TOKEN }}
@@ -76,11 +73,9 @@ jobs:
             <<< "${result}")"
           if [[ "${names}" == '["generated_at"]' ]]; then
             actual=1
-            legacy_export=true
           elif [[ "${names}" == '["generated_at","schema_version"]' ]]; then
             actual="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
               <<< "${row}")"
-            legacy_export=false
           else
             echo "::error::production D1 has an unknown export_meta shape: ${names}"
             exit 1
@@ -89,7 +84,6 @@ jobs:
             echo "::error::production D1 schema ${actual} is not in the site compatibility set ${compatible}"
             exit 1
           fi
-          echo "legacy_export=${legacy_export}" >> "${GITHUB_OUTPUT}"
 
   deploy:
     name: Deploy
@@ -120,17 +114,10 @@ jobs:
         run: npm ci --strict-allow-scripts
 
       - name: Reverify production schema compatibility
-        env:
-          LEGACY_EXPORT: ${{ needs.schema.outputs.legacy_export }}
         run: |
           health_file="${RUNNER_TEMP}/predeploy-health.json"
           status="$(curl --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
             --output "${health_file}" --write-out '%{http_code}' https://rakkan.dev/health/v1.json)"
-          if [[ "${status}" == "404" && "${LEGACY_EXPORT}" == "true" ]]; then
-            echo "Legacy schema 1 and the pre-health Worker were verified; proceeding with the bridge deployment." \
-              >> "${GITHUB_STEP_SUMMARY}"
-            exit 0
-          fi
           if [[ "${status}" != "200" ]]; then
             echo "::error::production health check returned HTTP ${status}"
             exit 1

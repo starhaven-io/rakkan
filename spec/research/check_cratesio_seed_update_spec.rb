@@ -9,9 +9,9 @@ RSpec.describe CratesioSeedUpdate do
 
   it "publishes a newer exact-source manifest when seed content is unchanged" do
     with_seed_pair do |current_seed, candidate_seed|
-      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z", version_created_at: "2026-08-17 00:00:00")
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z", version_created_at: "2026-08-17 00:00:00+00")
       write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z", source_commit: "a" * 40,
-                                 version_created_at: "2026-08-17 00:00:00")
+                                 version_created_at: "2026-08-17 00:00:00+00")
       rewrite_gzip_platform_byte(candidate_seed)
 
       result = described_class.check(current_seed:, candidate_seed:, now:)
@@ -170,6 +170,17 @@ RSpec.describe CratesioSeedUpdate do
     end
   end
 
+  it "rejects timestamps the ingestion adapter cannot interpret unambiguously" do
+    with_seed_pair do |current_seed, candidate_seed|
+      write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
+      write_seed(candidate_seed, taken_at: "2026-08-25T02:00:00Z",
+                                 version_created_at: "2026-08-24 00:00:00")
+
+      expect { described_class.check(current_seed:, candidate_seed:, now:) }
+        .to raise_error(ArgumentError, /lacks a UTC offset/)
+    end
+  end
+
   it "rejects an invalid archive digest" do
     with_seed_pair do |current_seed, candidate_seed|
       write_seed(current_seed, taken_at: "2026-08-18T02:00:00Z")
@@ -216,7 +227,7 @@ RSpec.describe CratesioSeedUpdate do
     Zlib::GzipWriter.open(File.join(seed_dir, "tracked_versions.tsv.gz")) do |gzip|
       gzip.mtime = 0
       gzip.write(CratesioSeedUpdate::VERSION_HEADER)
-      created_at = version_created_at || (Time.iso8601(taken_at) - 86_400).utc.strftime("%Y-%m-%d %H:%M:%S")
+      created_at = version_created_at || (Time.iso8601(taken_at) - 86_400).utc.strftime("%Y-%m-%d %H:%M:%S+00")
       versions.each_with_index do |version, index|
         latest = index == versions.length - 1
         gzip.puts("#{version}\t1\t#{created_at}\tfalse\t#{latest}\tfalse")

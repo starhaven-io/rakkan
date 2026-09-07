@@ -23,10 +23,10 @@ module Ingestion
         # adapter fails at the interface boundary without leaving registry data.
         tracked_packages = adapter.each_tracked_package
         seed_versions = adapter.each_seed_version
-        seed_attestations = adapter.each_seed_attestation.to_enum
+        seed_attestations = adapter.each_seed_attestation.to_a
         seed_at = adapter.seed_as_of
         provenance_seed_at = adapter.provenance_seed_as_of
-        if provenance_seed_at.nil? && stream_has_items?(seed_attestations)
+        if provenance_seed_at.nil? && !seed_attestations.empty?
           raise ArgumentError, "seed attestations require provenance_seed_as_of"
         end
 
@@ -40,7 +40,8 @@ module Ingestion
         package_count = upsert_packages(registry.id, tracked_packages, now)
         ref_to_id = packages.where(registry_id: registry.id).select(:id, :registry_ref).to_a
                             .to_h { |p| [p[:registry_ref], p[:id]] }
-        version_count = upsert_versions(ref_to_id, seed_versions, provenance_seed_at, now)
+        attested_refs = seed_attestations.to_h { |att| [att[:version_ref], true] }
+        version_count = upsert_versions(ref_to_id, seed_versions, provenance_seed_at, attested_refs, now)
         attested_count = apply_attestations(registry.id, seed_attestations, provenance_seed_at, now)
         recompute_first_provenant_at(registry.id)
         advance_feed_cursor(registry, seed_at, now)
@@ -75,7 +76,7 @@ module Ingestion
         rows.size
       end
 
-      def upsert_versions(ref_to_id, seed_versions, provenance_seed_at, now)
+      def upsert_versions(ref_to_id, seed_versions, provenance_seed_at, attested_refs, now)
         count = 0
         seed_versions.each_slice(CHUNK) do |chunk|
           rows = chunk.filter_map do |v|
@@ -95,9 +96,25 @@ module Ingestion
               updated_at: now
             }
           ).multi_insert(rows)
+          clear_absent_provenance(rows, attested_refs, provenance_seed_at, now) if provenance_seed_at
           count += rows.size
         end
         count
+      end
+
+      # Only versions actually present in this complete provenance seed can
+      # receive a negative observation. Preserve evidence newer than its cut time.
+      def clear_absent_provenance(rows, attested_refs, provenance_seed_at, now)
+        absent = rows.reject { |row| attested_refs[row[:registry_ref]] }
+        return if absent.empty?
+
+        package_versions.dataset
+                        .where(package_id: absent.map { |row| row[:package_id] }.uniq,
+                               registry_ref: absent.map { |row| row[:registry_ref] })
+                        .where(Sequel.|({ provenance_checked_at: nil },
+                                        Sequel[:provenance_checked_at] <= provenance_seed_at))
+                        .update(**RefreshProvenance::NO_PROVENANCE,
+                                provenance_checked_at: provenance_seed_at, updated_at: now)
       end
 
       def apply_attestations(registry_id, seed_attestations, provenance_seed_at, now)
@@ -130,13 +147,6 @@ module Ingestion
                   .where(id: registry.id)
                   .where(Sequel.|({ feed_synced_at: nil }, Sequel[:feed_synced_at] < seed_at))
                   .update(feed_synced_at: seed_at, updated_at: now)
-      end
-
-      def stream_has_items?(stream)
-        stream.peek
-        true
-      rescue StopIteration
-        false
       end
 
       def recompute_first_provenant_at(registry_id)

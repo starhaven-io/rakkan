@@ -4,17 +4,15 @@ require "database_cleaner/sequel"
 
 # Clean the databases between tests tagged as `:db`
 RSpec.configure do |config|
-  # Returns all the configured databases across the app and its slices.
-  #
-  # Used in the before/after hooks below to ensure each database is cleaned between examples.
-  #
-  # Modify this proc (or any code below) if you only need specific databases cleaned.
   all_databases = lambda {
-    Hanami.app.with_slices.each_with_object([]) do |slice, dbs|
+    databases = Hanami.app.with_slices.each_with_object([]) do |slice, dbs|
       next unless slice.key?("db.rom")
 
       dbs.concat slice["db.rom"].gateways.values.map(&:connection)
-    end.uniq
+    end
+    # Validate every connection before cleaning any database. Test environment
+    # URL rewriting alone cannot establish that an inherited path is disposable.
+    databases.uniq.each { |db| SpecDatabaseSafety.validate!(db, root: SPEC_ROOT.parent.to_s) }
   }
 
   config.before :suite do

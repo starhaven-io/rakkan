@@ -116,7 +116,7 @@ RSpec.describe "privileged workflow security contracts" do
     )
   end
 
-  it "serializes schema transitions and proves both sides of the compatibility bridge" do
+  it "serializes schema transitions and verifies both sides of the compatibility contract" do
     deploy = workflow("deploy-site.yml")
     refresh = workflow("refresh-data.yml")
 
@@ -130,8 +130,9 @@ RSpec.describe "privileged workflow security contracts" do
       ".compatibleVersions == $compatible",
       "index($health.schemaVersion)",
       %q(names}" == '["generated_at"]'),
-      '"${status}" == "404" && "${LEGACY_EXPORT}" == "true"'
+      '"${status}" != "200"'
     )
+    expect(deploy).not_to include("LEGACY_EXPORT", '"${status}" == "404"')
     expect(refresh).to include(
       "Verify deployed Worker accepts candidate schema",
       "https://rakkan.dev/health/v1.json",
