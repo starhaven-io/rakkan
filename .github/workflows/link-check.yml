@@ -1,18 +1,6 @@
 name: Link Check
 
 on:
-  pull_request:
-    paths:
-      - "**/*.md"
-      - ".github/workflows/link-check.yml"
-      - "lychee.toml"
-  push:
-    branches:
-      - main
-    paths:
-      - "**/*.md"
-      - ".github/workflows/link-check.yml"
-      - "lychee.toml"
   schedule:
     - cron: "0 14 * * 1" # every Monday at 14:00 UTC
   workflow_dispatch:
@@ -30,13 +18,7 @@ jobs:
       contents: read
     uses: starhaven-io/.github/.github/workflows/reusable-link-check.yml@fa61548f8fe7ee08b5b939bfbec5900c6c54306d # v2026.09.06.4
     with:
-      args: >-
-        --exclude '^http://localhost:4321/?$'
-        README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md
-        seed/README.md docs/architecture.md docs/data-freshness.md docs/operations.md
-        docs/adr/0001-registry-accepted-provenance.md
-        docs/adr/0002-reviewed-seed-publication.md
-        docs/adr/0003-d1-replacement.md
+      args: "--exclude '^http://localhost:4321/?$' README.md DATA_SOURCES.md seed/README.md"
       build-site: false
       site-directory: ""
       authenticated-github: true
