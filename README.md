@@ -158,8 +158,8 @@ expire as the wall clock advances. Protected refreshes and seed updaters retain
 the freshness gates. The command also enforces engine line/branch and
 TypeScript line/branch/function/statement
 coverage thresholds, Ruby and site tests, RuboCop, ShellCheck, Prettier, Astro
-type checking and production build, npm install-script policy, actionlint,
-zizmor, pinprick, and spelling. The test suites make no network calls: fixtures
+type checking and production build, npm install-script policy, strict Zizmor workflow collection,
+pinprick, and spelling. The test suites make no network calls: fixtures
 under `spec/fixtures/` are distilled from dump-derived seeds and recorded
 registry responses. Hosted dependency, CodeQL, and Codecov jobs remain hosted
 evidence and are not implied by the local gate.

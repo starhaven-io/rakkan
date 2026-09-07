@@ -38,7 +38,7 @@ over assuming framework APIs.
 
 - `just check`: the common entry point. Engine and site coverage gates,
   RuboCop, ShellCheck, Prettier, Astro type checking and production build,
-  actionlint, zizmor, pinprick, npm install policy, and typos.
+  zizmor with strict workflow collection, pinprick, npm install policy, and typos.
 - Specs require `HANAMI_ENV=test` and clean only this checkout's
   `db/rakkan_test.sqlite`; inherited database overrides cannot redirect cleanup.
 - `bin/setup && just dev`: fresh-clone path to the running site on real

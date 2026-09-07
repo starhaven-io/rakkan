@@ -13,7 +13,6 @@ RSpec.describe "check-tools.sh" do
       expect(stderr).to include(
         "Missing tools required by just check",
         "shellcheck (Homebrew package: shellcheck)",
-        "actionlint (Homebrew package: actionlint)",
         "zizmor (Homebrew package: zizmor)",
         "pinprick (Homebrew package: pinprick)",
         "typos (Homebrew package: typos-cli)"

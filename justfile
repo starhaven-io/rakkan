@@ -121,8 +121,7 @@ check:
     run rspec env COVERAGE=true bundle exec rspec
     run rubocop bundle exec rubocop --cache-root var/cache/rubocop
     run_tool shellcheck shellcheck shellcheck shellcheck bin/setup scripts/*.sh
-    run_tool actionlint actionlint actionlint actionlint
-    run_tool zizmor zizmor zizmor zizmor --persona auditor .github/workflows/
+    run_tool zizmor zizmor zizmor zizmor --strict-collection --persona auditor .github/workflows/
     run_tool pinprick pinprick pinprick pinprick audit .
     if [ -d site/node_modules ]; then
         run site-format bash -c 'cd site && npm run --silent format:check'

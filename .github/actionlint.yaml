@@ -1,5 +1,0 @@
-paths:
-  .github/workflows/{deploy-site,refresh-data,rollback-d1}.yml:
-    ignore:
-      # GitHub supports concurrency.queue; actionlint 1.7.12 does not yet parse it.
-      - 'unexpected key "queue" for "concurrency" section'
