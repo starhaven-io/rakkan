@@ -101,6 +101,21 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
     expect(registries.by_pk(registry.id).one[:feed_synced_at].to_time).to eq(newest_seen)
   end
 
+  it "reports an incomplete backlog when the budget ends at a drained window boundary" do
+    registry = create_registry!
+    from = Time.utc(2026, 8, 1)
+    window_end = from + described_class::MAX_WINDOW
+    adapter = FakeFeedAdapter.new(slug: "rubygems", batches: [
+                                    { entries: [], drained: true, pages: 500 }
+                                  ])
+
+    result = operation.call(from:, to: window_end + 3600, adapter:)
+
+    expect(result.value!).to include(drained: false, synced_through: window_end)
+    expect(registries.by_pk(registry.id).one[:feed_synced_at].to_time).to eq(window_end)
+    expect(adapter.calls.size).to eq(1)
+  end
+
   it "resumes from the persisted cursor with an overlap" do
     registry = create_registry!
     synced = Time.utc(2026, 8, 13, 12)

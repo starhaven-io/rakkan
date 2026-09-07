@@ -55,7 +55,7 @@ export function searchResultSummary(
   registryDisplayName: string | undefined,
   count: number,
 ): string {
-  return `${count} tracked ${packageNoun(registryName, count)} matched in ${registryDisplayName ?? 'the active registry'}.`;
+  return `Showing ${count} matching tracked ${packageNoun(registryName, count)} in ${registryDisplayName ?? 'the active registry'}.`;
 }
 
 export function normalizeSearchQuery(value: string | null | undefined): string {

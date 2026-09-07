@@ -8,7 +8,7 @@
 <!-- fleet:end -->
 
 A public tracker for trusted publishing adoption across package registries:
-which packages publish with verifiable provenance, what share of the
+which packages publish with registry-accepted provenance, what share of the
 most-downloaded packages have adopted it, and how that changes over time.
 
 RubyGems.org is the first production registry. The schema and ingestion
@@ -16,7 +16,7 @@ pipeline are registry-agnostic: crates.io carries its tracked set in
 `seed/cratesio/`, reads provenance from the API, and is exposed by the web
 tier. Weekly workflows propose both production tracked-set refreshes as
 reviewed pull requests. PyPI reads provenance, while its tracked set and
-durable discovery cursor remain the next implementation phase. The ingestion
+durable discovery cursor are not implemented. The ingestion
 engine is built with [Hanami 3.0.2](https://hanakai.org/hanami).
 
 Where the provenance signal actually lives, with recorded evidence, is
@@ -133,9 +133,9 @@ Push-triggered refresh dry runs use a fresh local database and receive no
 Cloudflare environment or token. Site deployment is separate and performs a
 read-only D1 schema-contract check while holding the production transition
 lock before deploying the Worker, then verifies that the deployed health
-endpoint advertises the expected compatibility set. The first health-endpoint
-rollout recognizes only the exact historical one-column export marker as
-legacy schema 1; all later and post-deploy health checks remain strict.
+endpoint advertises the expected compatibility set. Every pre-deploy and
+post-deploy health check requires a successful response. The legacy one-column
+export marker remains readable as schema 1 for the documented recovery window.
 The Worker also exposes a D1-independent compatibility route so rollback can
 validate reader support even when the current database is unhealthy.
 

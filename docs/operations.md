@@ -21,8 +21,9 @@ bypass actors, so requiring one approval would make every maintainer-authored
 pull request permanently unmergeable. The enforced gate on a bot-opened seed
 pull request is therefore a human merge rather than a human approval; the
 proposal workflows never call the merge API, and their app token is minted per
-run. When a second maintainer joins, set `required_approving_review_count` to 1
-and `dismiss_stale_reviews_on_push` to true, then revise this section.
+run. When another trusted maintainer can provide independent review, reassess
+required approvals and stale-review dismissal, then update this policy and its
+provider configuration together.
 
 Configure these GitHub environments and keep their credentials disjoint:
 
@@ -33,8 +34,11 @@ Configure these GitHub environments and keep their credentials disjoint:
 | `cloudflare-d1` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_TOKEN` | Export, replace, restore, and verify production D1 |
 | `cloudflare-worker` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_WORKER_TOKEN` | Deploy the Worker without D1-write or zone-route authority |
 
-Restrict production environments to `main`, add required reviewers where the
-organization's risk policy calls for them, and set the shortest practical
+Restrict production environments to the `main` branch, excluding tags named
+`main`. While there is one maintainer, do not require a second reviewer or
+self-approval; the reviewed pull request, explicit recovery dispatch, and
+scoped credentials provide the operational gates. Reassess independent review
+when another trusted maintainer can provide it. Set the shortest practical
 token lifetime and scope. The custom domain is managed out of band; the Worker
 token must not receive zone route permissions.
 
@@ -78,7 +82,7 @@ eventual result.
 ## Protected data refresh
 
 `Refresh Data` is the sole routine production D1 publisher; `Roll back D1` is
-the separately approved recovery writer. Refresh Data checks out and verifies
+the manually dispatched recovery writer. Refresh Data checks out and verifies
 the exact triggering `main` SHA, restores current production history into a
 fresh engine database, validates and ingests the committed seed, drains or
 advances registry work, creates a snapshot only when complete, and exports a
@@ -117,6 +121,15 @@ The refresh wrapper captures one UTC run date and passes it to every refresh
 attempt and the final snapshot. A waiver cannot change status between those
 subprocesses if the run crosses midnight.
 
+The historical RubyGems snapshot repair is a temporary migration, owned by the
+repository maintainer. It removes only the three mislabeled August 2026 dates
+created before the fixed 2026-09-07 cutoff. Before the next weekly refresh, and
+no later than 2026-09-14, verify that production has no matching rows and that
+no eligible recovery artifact can reintroduce them. Then remove the automatic
+repair step, task, and operation together, retaining the migration evidence in
+the change's pull request. This section tracks its removal; local tests prove
+the narrow predicate, not that production has completed the repair.
+
 ## Schema changes
 
 `site/schema-contract.json` declares both the schema written by the engine and
@@ -137,13 +150,17 @@ health response exposes both its current database version and the Worker's
 compatibility set; `Refresh Data` checks that set before replacement. The
 runtime also fails closed if an incompatible database reaches it.
 
-The one bootstrap exception is deliberately narrow. An `export_meta` table
-whose only column is `generated_at` is legacy schema 1. If that exact database
-shape is independently verified, the first deployment may accept HTTP 404 from
-the old Worker that predates the health route. Unknown marker shapes, invalid
-timestamps, and all non-404 failures stop deployment; the post-deploy health
-check is always strict. During replacement, a temporarily absent marker may use
-a warm isolate's last accepted cache generation, while a schema mismatch is
+Every pre-deploy and post-deploy health check requires HTTP 200.
+
+The exact historical `export_meta` shape containing only `generated_at` remains
+readable as legacy schema 1 so a retained recovery bookmark can still be restored.
+The repository maintainer owns this compatibility exception. Before the next
+schema change, and no later than 2026-09-14, inspect the production marker shape
+and retained recovery artifacts. Remove the legacy readers after production and
+all eligible rollback points contain `schema_version`; retain evidence in the
+change's pull request. This section is the canonical tracking record. Unknown
+marker shapes fail closed. During replacement, a temporarily absent marker may
+use a warm isolate's last accepted cache generation, while a schema mismatch is
 always fatal.
 
 ## Rollback
@@ -157,8 +174,8 @@ For a bad data replacement:
    preceding refresh and verify it contains the expected Time Travel bookmark,
    recovery manifest, and checksum-matching SQL evidence export.
 3. From `main`, dispatch `Roll back D1` with the source Refresh Data run ID.
-   Approve its protected `cloudflare-d1` environment only after checking the
-   terminal run and artifact. A successful, failed, cancelled, or timed-out
+   Check the terminal run and artifact before dispatch; the main-only
+   `cloudflare-d1` environment supplies the scoped recovery credential. A successful, failed, cancelled, or timed-out
    source run is eligible only when the expected recovery artifact exists and
    passes all validation. The workflow validates the bounded manifest and
    evidence checksum, uses the Worker's D1-independent compatibility route to

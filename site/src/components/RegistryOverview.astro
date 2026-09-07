@@ -35,11 +35,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
     !registry ? (
       <section class="empty-state">
         <h1>No data yet</h1>
-        <p>The D1 database has not been loaded. Export from the ingestion side and load it locally:</p>
-        <div class="command-list">
-          <code>bundle exec rake export:d1</code>
-          <code>cd site && npx wrangler d1 execute rakkan --local --file=../db/d1_export.sql</code>
-        </div>
+        <p>Package data is not available for this registry yet. Please check back later.</p>
       </section>
     ) : !snapshot ? (
       <section class="empty-state">

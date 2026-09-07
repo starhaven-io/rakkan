@@ -41,9 +41,9 @@ RSpec.describe CratesioSeedBuilder do
       expect(rows).to eq(
         [
           "id\tnumber\tcrate_id\tcreated_at\tprerelease\tlatest\tyanked",
-          "20\t2.0.0-alpha.1\t2\t2026-08-18 01:00:00\ttrue\tfalse\tfalse",
-          "21\t2.0.0\t2\t2026-08-19 01:00:00\tfalse\ttrue\tfalse",
-          "30\t3.0.0\t3\t2026-08-20 01:00:00\tfalse\ttrue\ttrue"
+          "20\t2.0.0-alpha.1\t2\t2026-08-18 01:00:00+00\ttrue\tfalse\tfalse",
+          "21\t2.0.0\t2\t2026-08-19 01:00:00+00\tfalse\ttrue\tfalse",
+          "30\t3.0.0\t3\t2026-08-20 01:00:00+00\tfalse\ttrue\ttrue"
         ]
       )
     end
@@ -68,8 +68,8 @@ RSpec.describe CratesioSeedBuilder do
       File.write(
         versions,
         File.read(versions).sub(
-          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00,f\n",
-          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00,unknown\n"
+          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00+00,f\n",
+          "20,2,2.0.0-alpha.1,2026-08-18 01:00:00+00,unknown\n"
         )
       )
       expect do
@@ -109,10 +109,10 @@ RSpec.describe CratesioSeedBuilder do
     CSV
     File.write(File.join(data_dir, "versions.csv"), <<~CSV)
       id,crate_id,num,created_at,yanked
-      10,1,1.0.0,2026-08-17 01:00:00,f
-      20,2,2.0.0-alpha.1,2026-08-18 01:00:00,f
-      21,2,2.0.0,2026-08-19 01:00:00,f
-      30,3,3.0.0,2026-08-20 01:00:00,t
+      10,1,1.0.0,2026-08-17 01:00:00+00,f
+      20,2,2.0.0-alpha.1,2026-08-18 01:00:00+00,f
+      21,2,2.0.0,2026-08-19 01:00:00+00,f
+      30,3,3.0.0,2026-08-20 01:00:00+00,t
     CSV
   end
 

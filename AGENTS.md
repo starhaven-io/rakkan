@@ -1,12 +1,12 @@
 # Agent Instructions for rakkan
 
 rakkan is a public tracker for trusted publishing adoption across package
-registries: which packages publish with verifiable provenance, adoption share
+registries: which packages publish with registry-accepted provenance, adoption share
 among the most-downloaded packages, and trends over time. RubyGems.org is the
 first production registry; the schema and ingestion pipeline are
 registry-agnostic. crates.io has its tracked set committed in
-`seed/cratesio/`, reads provenance from the API, has completed its initial
-production backfill, and is available in the web tier. A weekly workflow
+`seed/cratesio/`, reads provenance from the API, and is available in the web
+tier. A weekly workflow
 regenerates its tracked set on an automation branch; a bot-opened,
 human-reviewed seed PR must merge before the protected production refresh is dispatched.
 PyPI is still provenance-only and needs both a tracked set and a durable
@@ -39,6 +39,8 @@ over assuming framework APIs.
 - `just check`: the common entry point. Engine and site coverage gates,
   RuboCop, ShellCheck, Prettier, Astro type checking and production build,
   actionlint, zizmor, pinprick, npm install policy, and typos.
+- Specs require `HANAMI_ENV=test` and clean only this checkout's
+  `db/rakkan_test.sqlite`; inherited database overrides cannot redirect cleanup.
 - `bin/setup && just dev`: fresh-clone path to the running site on real
   data (engine deps, databases, seed, site deps, local D1; no network
   beyond package installs). Piecemeal equivalents live in the justfile
@@ -49,8 +51,8 @@ over assuming framework APIs.
 ## Safety constraints
 
 - **Be a polite client.** All registry traffic must go through
-  `Ingestion::HTTPClient` (identifying User-Agent, ~4 req/s against a
-  documented 10 req/s limit, backoff honoring Retry-After, disk cache under
+  `Ingestion::HTTPClient` (identifying User-Agent, registry-specific rate
+  limits, backoff honoring Retry-After, disk cache under
   `var/cache/`). Do not add raw HTTP calls elsewhere.
 - **Never scrape registry HTML.** The provenance signal is fully available
   from JSON APIs and the public dumps (see DATA_SOURCES.md). The HTML-only

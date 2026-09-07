@@ -64,6 +64,8 @@ module Ingestion
           end
         end
 
+        # A complete window can consume the last page while later windows remain.
+        drained = false if cursor < to
         registries.by_pk(registry.id).command(:update).call(feed_synced_at: cursor, updated_at: now)
         { window_from: from, window_to: to, upserts: inserted, synced_through: cursor, drained: }
       end

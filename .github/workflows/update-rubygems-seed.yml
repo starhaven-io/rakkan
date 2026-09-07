@@ -284,7 +284,7 @@ jobs:
             echo "- Commit: [${title}](${commit_url})"
             echo "- Pull request: ${pr_url}"
             echo
-            echo "Hosted rules must require an independent human approval before merge."
+            echo "A reviewed human merge remains the production gate; the post-merge listener dispatches the protected refresh."
           } >> "${GITHUB_STEP_SUMMARY}"
 
   seed-issue:

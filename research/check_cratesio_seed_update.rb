@@ -185,7 +185,11 @@ module CratesioSeedUpdate
         expected_prerelease = CratesioSeedBuilder.prerelease?(number).to_s
         raise ArgumentError, "prerelease flag does not match the version" unless prerelease == expected_prerelease
 
-        timestamp = Time.parse("#{created_at} UTC")
+        unless created_at.match?(/(?:Z|[+-]\d{2}(?::?\d{2})?)\z/)
+          raise ArgumentError, "version timestamp lacks a UTC offset"
+        end
+
+        timestamp = Time.parse(created_at).utc
         raise ArgumentError, "version timestamp is after the dump" if timestamp > dump_taken_at + MAX_CLOCK_SKEW
 
         ids[id] = true

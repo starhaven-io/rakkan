@@ -73,7 +73,10 @@ test('packageNoun follows the registry slug', () => {
 });
 
 test('searchResultSummary keeps the registry name and sentence punctuation together', () => {
-  assert.equal(searchResultSummary('rubygems', 'RubyGems.org', 12), '12 tracked gems matched in RubyGems.org.');
+  assert.equal(
+    searchResultSummary('rubygems', 'RubyGems.org', 12),
+    'Showing 12 matching tracked gems in RubyGems.org.',
+  );
 });
 
 test('normalizeSearchQuery trims and bounds user-controlled search work', () => {

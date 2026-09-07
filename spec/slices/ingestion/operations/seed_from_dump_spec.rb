@@ -117,6 +117,44 @@ RSpec.describe Ingestion::Operations::SeedFromDump, :db do
     expect(row[:provenance_checked_at].to_time).to eq(live_at)
   end
 
+  it "uses a complete newer dump to clear absent provenance without replacing newer live evidence" do
+    operation.call(adapter:)
+    attested = versions.provenant.to_a.first(2)
+    expect(attested.length).to eq(2)
+    newer_seed_at = adapter.seed_as_of + 3600
+    live_at = newer_seed_at + 3600
+    versions.by_pk(attested.last[:id]).command(:update).call(provenance_checked_at: live_at)
+    allow(adapter).to receive_messages(
+      seed_as_of: newer_seed_at,
+      provenance_seed_as_of: newer_seed_at,
+      each_seed_attestation: [].each
+    )
+
+    operation.call(adapter:)
+
+    cleared = versions.by_pk(attested.first[:id]).one
+    expect(cleared).to include(provenance_kind: nil, provenance_provider: nil,
+                               source_repository: nil, attestation_count: 0)
+    expect(cleared[:provenance_checked_at].to_time).to eq(newer_seed_at)
+    retained = versions.by_pk(attested.last[:id]).one
+    expect(retained[:provenance_kind]).to eq(attested.last[:provenance_kind])
+    expect(retained[:provenance_checked_at].to_time).to eq(live_at)
+  end
+
+  it "does not let a newer dump without provenance authority clear a known observation" do
+    operation.call(adapter:)
+    attested = versions.provenant.to_a.first
+    allow(adapter).to receive_messages(
+      seed_as_of: adapter.seed_as_of + 3600,
+      provenance_seed_as_of: nil,
+      each_seed_attestation: [].each
+    )
+
+    operation.call(adapter:)
+
+    expect(versions.by_pk(attested[:id]).one[:provenance_kind]).to eq(attested[:provenance_kind])
+  end
+
   # End to end on the other registry shape: a dump that carries package and
   # version state but no provenance at all.
   it "seeds a registry whose dump has no provenance without recording observations" do
