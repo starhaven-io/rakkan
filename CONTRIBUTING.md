@@ -56,8 +56,9 @@ plan or checklist. If an AI or LLM assisted the pull request, follow the exact
 disclosure rule in [AGENTS.md](AGENTS.md). Do not identify an AI system as a
 commit author, co-author, committer, or signatory.
 
-At least one human approval, stale-approval dismissal, and the required
-`conclusion` check are hosted repository controls. See
+Required pull requests, the `conclusion` check, DCO, and Fleet Guard are hosted
+repository controls; required approvals are zero while the organization has one
+maintainer, so a human merge is the gate. See
 [docs/operations.md](docs/operations.md) before changing branch protections,
 environments, or production workflows.
 

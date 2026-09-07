@@ -102,9 +102,9 @@ and retries a dispatch cancelled or skipped outside the production queue. The
 shared production lock retains up to 100 pending deploys, refreshes, and
 rollbacks instead of silently replacing an earlier pending run. Each seed
 listener requests both registries, and a run waiting for protected-environment
-approval remains authoritative after the listener's bounded wait. Hosted
-rulesets must require an independent human approval; repository text alone
-cannot enforce or prove that control.
+approval remains authoritative after the listener's bounded wait. A human merges
+every seed pull request; hosted rulesets, not repository text, decide whether an
+approval is required as well.
 
 `Refresh Data` restores production history into a fresh engine database,
 validates the committed seed is no more than nine days old, performs resumable

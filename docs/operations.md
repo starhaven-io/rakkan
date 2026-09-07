@@ -8,13 +8,21 @@ hosted controls.
 
 Protect `main` with a GitHub ruleset that:
 
-- requires pull requests and at least one approval from a human other than the
-  author;
-- dismisses stale approvals when the head changes;
-- requires the `conclusion` status from `.github/workflows/ci.yml`;
+- requires pull requests, with squash as the only merge method;
+- requires the `conclusion` status from `.github/workflows/ci.yml`, plus the
+  organization's DCO and Fleet Guard workflow rules;
 - prevents force pushes and branch deletion;
 - gives automation no review or ruleset-bypass authority, except for a
   separately audited emergency path.
+
+Required approvals are deliberately zero while the organization has a single
+maintainer. GitHub does not permit self-approval and the ruleset carries no
+bypass actors, so requiring one approval would make every maintainer-authored
+pull request permanently unmergeable. The enforced gate on a bot-opened seed
+pull request is therefore a human merge rather than a human approval; the
+proposal workflows never call the merge API, and their app token is minted per
+run. When a second maintainer joins, set `required_approving_review_count` to 1
+and `dismiss_stale_reviews_on_push` to true, then revise this section.
 
 Configure these GitHub environments and keep their credentials disjoint:
 
@@ -54,7 +62,7 @@ proposals, extra files, a truncated tree response, or an unreadable blob fails
 closed.
 
 Review the manifest source and timestamp, semantic row-count summary, and exact
-file list. Merge only after required CI and an independent human approval. The
+file list. Merge only after required CI passes and you have read the diff. The
 post-merge listener accepts only the expected repository, `main` base, fixed
 automation branch, seed-only file set, and exact merge SHA. It requires that
 merge to remain an ancestor of current `main`, authorizes one immutable current

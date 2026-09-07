@@ -20,5 +20,8 @@ set.
 ## Consequences
 
 Tracked-set drift is visible and reviewable, and untrusted input is separated
-from proposal credentials. Production still depends on hosted rulesets to
-require a human approval; that control must be verified outside the repository.
+from proposal credentials. Production still depends on a human reading the diff
+and performing the merge, which no repository file can enforce or prove. While
+the organization has one maintainer that merge is the gate, since GitHub does
+not permit self-approval; a required approval becomes enforceable only with a
+second reviewer.

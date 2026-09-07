@@ -27,9 +27,9 @@ Compressed files use deterministic timestamps. Gzip container metadata does
 not count as tracked-content drift, while a newer exact dump still advances its
 manifest so the committed source never expires behind unchanged package rows.
 
-The bot can propose a seed but cannot approve or merge it. Hosted repository
-rules must require independent human approval; see
-[`docs/operations.md`](../docs/operations.md).
+The bot proposes a seed; a human merges it. The proposal workflow never calls
+the merge API. See [`docs/operations.md`](../docs/operations.md) for the hosted
+controls and their current limits.
 
 Rights in the underlying registry records remain with their respective
 owners and are governed by each registry's terms of service; rakkan does
