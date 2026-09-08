@@ -145,17 +145,14 @@ jobs:
           columns="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
             --command='PRAGMA table_info(export_meta)')"
           column_names="$(jq -cer '[.[0].results[].name] | sort' <<< "${columns}")"
-          if [[ "${column_names}" == '["generated_at"]' ]]; then
-            actual_schema=1
-          elif [[ "${column_names}" == '["generated_at","schema_version"]' ]]; then
-            schema_result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
-              --command='SELECT schema_version FROM export_meta LIMIT 1')"
-            actual_schema="$(jq -er '.[0].results[0].schema_version |
-              select(type == "number" and floor == . and . > 0)' <<< "${schema_result}")"
-          else
+          if [[ "${column_names}" != '["generated_at","schema_version"]' ]]; then
             echo "::error::restored D1 has an unknown export_meta shape: ${column_names}"
             exit 1
           fi
+          schema_result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
+            --command='SELECT schema_version FROM export_meta LIMIT 1')"
+          actual_schema="$(jq -er '.[0].results[0].schema_version |
+            select(type == "number" and floor == . and . > 0)' <<< "${schema_result}")"
           result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
             SELECT
               (SELECT generated_at FROM export_meta LIMIT 1) AS generated_at,

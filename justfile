@@ -144,7 +144,7 @@ check:
 
 # Check documentation links
 lychee:
-    lychee --config lychee.toml README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md seed/README.md docs/architecture.md docs/data-freshness.md docs/operations.md docs/adr/0001-registry-accepted-provenance.md docs/adr/0002-reviewed-seed-publication.md docs/adr/0003-d1-replacement.md
+    lychee --config lychee.toml README.md AGENTS.md CLAUDE.md DATA_SOURCES.md SECURITY.md CONTRIBUTING.md CODE_OF_CONDUCT.md seed/README.md docs/architecture.md docs/data-freshness.md docs/operations.md
 
 # fleet:block install-hooks
 # Install git hooks (AI trailer guard + DCO sign-off + pre-push checks). Run once per clone.

@@ -19,7 +19,6 @@ if (
 
 export const EXPECTED_SCHEMA_VERSION = schemaContract.version;
 export const COMPATIBLE_SCHEMA_VERSIONS: readonly number[] = Object.freeze([...schemaContract.compatibleVersions]);
-export const LEGACY_SCHEMA_VERSION = 1;
 
 export class SchemaVersionError extends Error {
   override name = 'SchemaVersionError';
@@ -132,12 +131,11 @@ export async function exportMetadata(
   if (!row) throw new ExportUnavailableError('D1 export metadata is temporarily unavailable');
 
   const keys = Object.keys(row).sort();
-  const legacy = keys.length === 1 && keys[0] === 'generated_at';
   const versioned = keys.length === 2 && keys[0] === 'generated_at' && keys[1] === 'schema_version';
-  const schemaVersion = legacy ? LEGACY_SCHEMA_VERSION : row.schema_version;
-  if (!legacy && !versioned) {
+  if (!versioned) {
     throw new SchemaVersionError('D1 export metadata has an unknown schema');
   }
+  const schemaVersion = row.schema_version;
   if (!validVersion(schemaVersion) || !compatibleVersions.includes(schemaVersion)) {
     throw new SchemaVersionError(`D1 schema version ${String(schemaVersion)} is not compatible with this site`);
   }

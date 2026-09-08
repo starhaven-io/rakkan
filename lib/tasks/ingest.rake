@@ -119,13 +119,6 @@ namespace :ingest do
 end
 
 namespace :snapshot do
-  desc "Remove known RubyGems observations mislabeled by the former normalization step"
-  task :repair_rubygems_history do
-    require "hanami/boot"
-    result = Ingestion::Slice["operations.repair_rubygems_snapshots"].call
-    puts JSON.generate(result.value!)
-  end
-
   desc "Record today's adoption snapshot"
   task :take, %i[registry run_date] do |_task, args|
     require "hanami/boot"
