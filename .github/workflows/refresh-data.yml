@@ -229,7 +229,18 @@ jobs:
         run: timeout --signal=TERM --kill-after=30s 70m bash scripts/refresh-registry-data.sh
 
       - name: Export refreshed D1 database
-        run: bundle exec rake export:d1
+        run: |
+          bundle exec rake export:d1
+          candidate="$(bundle exec ruby scripts/verify_d1_export_manifest.rb \
+            db/d1_export.meta.json db/d1_export.sql)"
+          candidate_generated_at="$(jq -er '.generated_at' <<< "${candidate}")"
+          previous_generated_at="$(jq -er '.generated_at' "${D1_RECOVERY_MANIFEST}")"
+          if [[ "${candidate_generated_at}" == "${previous_generated_at}" ]]; then
+            echo "::error::candidate D1 export reuses the current production generation"
+            exit 1
+          fi
+        env:
+          D1_RECOVERY_MANIFEST: ${{ runner.temp }}/rakkan-d1-recovery.json
 
       - name: Preserve pre-refresh production backup
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -255,45 +266,107 @@ jobs:
           ' <<< "${health}" >/dev/null
 
       - name: Replace production data
+        id: replace
         if: github.event_name != 'push'
         working-directory: site
-        run: ./node_modules/.bin/wrangler d1 execute rakkan --remote --file=../db/d1_export.sql --yes > /dev/null
+        run: |
+          import_exit_code=0
+          ./node_modules/.bin/wrangler d1 execute rakkan \
+            --remote --file=../db/d1_export.sql --yes || import_exit_code=$?
+          echo "exit_code=${import_exit_code}" >> "${GITHUB_OUTPUT}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
 
       - name: Verify replacement
+        if: github.event_name != 'push'
         working-directory: site
         run: |
-          expected_registries="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM registries;')"
-          expected_packages="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM packages;')"
-          expected_versions="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM package_versions;')"
-          expected_snapshots="$(sqlite3 ../db/rakkan.sqlite 'SELECT COUNT(*) FROM adoption_snapshots;')"
-          result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
-            SELECT
-              (SELECT schema_version FROM export_meta LIMIT 1) AS schema_version,
-              (SELECT COUNT(*) FROM registries) AS registries,
-              (SELECT COUNT(*) FROM packages) AS packages,
-              (SELECT COUNT(*) FROM package_versions) AS package_versions,
-              (SELECT COUNT(*) FROM adoption_snapshots) AS adoption_snapshots
-          ')"
-          jq -e \
-            --argjson expected_schema "$(jq -er .version schema-contract.json)" \
-            --argjson expected_registries "${expected_registries}" \
-            --argjson expected_packages "${expected_packages}" \
-            --argjson expected_versions "${expected_versions}" \
-            --argjson expected_snapshots "${expected_snapshots}" '
-            .[0].results[0] |
-            .schema_version == $expected_schema and
-            .registries == $expected_registries and
-            .packages == $expected_packages and
-            .package_versions == $expected_versions and
-            .adoption_snapshots == $expected_snapshots
-          ' <<< "${result}" >/dev/null
+          if ! expected="$(bundle exec ruby ../scripts/verify_d1_export_manifest.rb \
+            ../db/d1_export.meta.json ../db/d1_export.sql)"; then
+            echo "::error::D1 export artifacts changed or became invalid after replacement"
+            exit 1
+          fi
+          if [[ ! "${IMPORT_EXIT_CODE}" =~ ^[0-9]+$ ]]; then
+            echo "::error::D1 import did not report a valid exit code"
+            exit 1
+          fi
+
+          max_attempts=6
+          if (( IMPORT_EXIT_CODE != 0 )); then
+            max_attempts=120
+          fi
+
+          verified=false
+          last_state=query_failed
+          last_result=""
+          for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+            if result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
+              SELECT
+                (SELECT generated_at FROM export_meta LIMIT 1) AS generated_at,
+                (SELECT schema_version FROM export_meta LIMIT 1) AS schema_version,
+                (SELECT COUNT(*) FROM registries) AS registries,
+                (SELECT COUNT(*) FROM packages) AS packages,
+                (SELECT COUNT(*) FROM package_versions) AS package_versions,
+                (SELECT COUNT(*) FROM adoption_snapshots) AS adoption_snapshots
+            ')"; then
+              if actual="$(jq -cer '
+                .[0].results | select(type == "array" and length == 1) | .[0] |
+                select(
+                  (.generated_at | type == "string") and
+                  ([.schema_version, .registries, .packages, .package_versions, .adoption_snapshots] |
+                    all(type == "number" and floor == . and . >= 0))
+                )
+              ' <<< "${result}")"; then
+                last_state=mismatch
+                last_result="${actual}"
+                if jq -e --argjson expected "${expected}" '
+                  .generated_at == $expected.generated_at and
+                  .schema_version == $expected.schema_version and
+                  .registries == $expected.counts.registries and
+                  .packages == $expected.counts.packages and
+                  .package_versions == $expected.counts.package_versions and
+                  .adoption_snapshots == $expected.counts.adoption_snapshots
+                ' <<< "${actual}" >/dev/null; then
+                  verified=true
+                  break
+                fi
+              else
+                last_state=query_failed
+              fi
+            else
+              last_state=query_failed
+            fi
+            if (( attempt < max_attempts )); then
+              sleep 5
+            fi
+          done
+
+          if [[ "${verified}" != true ]]; then
+            if [[ "${last_state}" == "query_failed" ]]; then
+              echo "::error::could not read a valid production D1 state after replacement"
+            else
+              echo "::error::production D1 generation or table counts do not match the exported candidate"
+            fi
+            if [[ -n "${last_result}" ]]; then
+              printf 'Last observed production state: %s\n' "${last_result}" >&2
+            fi
+            exit 1
+          fi
+
+          if (( IMPORT_EXIT_CODE != 0 )); then
+            echo "::warning::Wrangler exited ${IMPORT_EXIT_CODE}, but production matches the candidate generation and table counts"
+            {
+              echo "### D1 import client anomaly"
+              echo
+              echo "Wrangler exited ${IMPORT_EXIT_CODE}, but remote readback verified the exact candidate generation and table counts."
+            } >> "${GITHUB_STEP_SUMMARY}"
+          fi
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_D1_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          IMPORT_EXIT_CODE: ${{ steps.replace.outputs.exit_code }}
           WRANGLER_SEND_METRICS: "false"
 
   dry-run:
@@ -331,6 +404,8 @@ jobs:
           REGISTRY=cratesio timeout --signal=TERM --kill-after=30s 15m \
             bash scripts/refresh-registry-data.sh
           bundle exec rake export:d1
+          bundle exec ruby scripts/verify_d1_export_manifest.rb \
+            db/d1_export.meta.json db/d1_export.sql >/dev/null
 
       - name: Report dry run
         run: echo "Both registries ingested and exported without reading or replacing production D1." >> "${GITHUB_STEP_SUMMARY}"

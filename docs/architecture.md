@@ -55,7 +55,9 @@ automation branch.
 
 `rake export:d1` reads the engine database in one transaction and atomically
 writes schema plus data in foreign-key order. The export adds `export_meta`
-with a generation timestamp and the version from `site/schema-contract.json`.
+with a generation timestamp and the version from `site/schema-contract.json`,
+plus a checksum-bound metadata sidecar containing that identity and exact table
+counts for publication readback.
 
 The Astro Worker reads D1 but never writes it. The middleware checks the schema
 contract before serving an edge-cached generation. A mismatch is fatal, not a

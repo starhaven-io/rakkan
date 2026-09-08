@@ -190,8 +190,11 @@ placing credentials or private incident data in the repository.
 - Treat unexpected zero counts, a schema mismatch, a stale manifest, a feed
   contract error, or a seed file-set violation as a publication stop.
 - Determine whether production changed. A failure before the D1 execute step
-  leaves production untouched; a failure during or after it requires remote
-  readback and may require rollback.
+  leaves production untouched. After an import starts, distinguish a verified
+  candidate from a proven mismatch and from failed readback. Treat failed
+  readback as unknown production state and inspect production manually before
+  deciding whether to roll back. Do not roll back a verified candidate solely
+  because the client lost the terminal import status.
 - Rotate a token if logs or artifacts could have exposed it. Never paste secret
   values into an issue.
 - Preserve manifests, checksums, workflow run identifiers, and the exact
