@@ -12,7 +12,6 @@ import {
   exportGeneratedAt,
   exportMetadata,
   healthPayload,
-  LEGACY_SCHEMA_VERSION,
   SchemaVersionError,
   latestSnapshot,
   loadPackageDetail,
@@ -151,20 +150,11 @@ test('metadata compatibility sets support an N to N+1 rollout bridge', async (t)
   assert.ok(COMPATIBLE_SCHEMA_VERSIONS.includes(EXPECTED_SCHEMA_VERSION));
 });
 
-test('metadata recognizes only the exact legacy unversioned export as schema 1', async (t) => {
+test('metadata rejects an unversioned export marker', async (t) => {
   const db = database(t);
   db.sqlite.exec('DROP TABLE export_meta; CREATE TABLE export_meta (generated_at TEXT NOT NULL);');
   db.sqlite.exec("INSERT INTO export_meta VALUES ('2026-08-22 17:28:00')");
 
-  assert.deepEqual(
-    { ...(await exportMetadata(db)) },
-    {
-      generated_at: '2026-08-22 17:28:00',
-      schema_version: LEGACY_SCHEMA_VERSION,
-    },
-  );
-
-  db.sqlite.exec('ALTER TABLE export_meta ADD COLUMN unexpected TEXT');
   await assert.rejects(() => exportMetadata(db), SchemaVersionError);
 });
 

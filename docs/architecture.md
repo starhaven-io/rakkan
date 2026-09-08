@@ -61,8 +61,7 @@ The Astro Worker reads D1 but never writes it. The middleware checks the schema
 contract before serving an edge-cached generation. A mismatch is fatal, not a
 stale-cache fallback. A marker temporarily absent during replacement can use a
 warm isolate's last accepted generation, but an unknown marker shape cannot.
-The exact historical marker containing only `generated_at` is treated as schema
-1 solely to bootstrap the versioned health contract. Heavy package and version
+Only the exact versioned marker shape is accepted. Heavy package and version
 lists are paginated and capped; edge cache keys discard arbitrary query
 parameters and retain only the bounded canonical page.
 The public compatibility route reads only the Worker's compiled schema contract,
@@ -82,9 +81,3 @@ There are four independent authorities:
 Repository code cannot attest that hosted rulesets, environment reviewers, or
 token scopes are configured correctly. Those controls require periodic
 readback as described in [operations.md](operations.md).
-
-## Decisions
-
-- [Registry-accepted provenance](adr/0001-registry-accepted-provenance.md)
-- [Reviewed seed publication](adr/0002-reviewed-seed-publication.md)
-- [Atomic D1 replacement](adr/0003-d1-replacement.md)

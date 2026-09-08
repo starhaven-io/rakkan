@@ -121,15 +121,6 @@ The refresh wrapper captures one UTC run date and passes it to every refresh
 attempt and the final snapshot. A waiver cannot change status between those
 subprocesses if the run crosses midnight.
 
-The historical RubyGems snapshot repair is a temporary migration, owned by the
-repository maintainer. It removes only the three mislabeled August 2026 dates
-created before the fixed 2026-09-07 cutoff. Before the next weekly refresh, and
-no later than 2026-09-14, verify that production has no matching rows and that
-no eligible recovery artifact can reintroduce them. Then remove the automatic
-repair step, task, and operation together, retaining the migration evidence in
-the change's pull request. This section tracks its removal; local tests prove
-the narrow predicate, not that production has completed the repair.
-
 ## Schema changes
 
 `site/schema-contract.json` declares both the schema written by the engine and
@@ -152,16 +143,10 @@ runtime also fails closed if an incompatible database reaches it.
 
 Every pre-deploy and post-deploy health check requires HTTP 200.
 
-The exact historical `export_meta` shape containing only `generated_at` remains
-readable as legacy schema 1 so a retained recovery bookmark can still be restored.
-The repository maintainer owns this compatibility exception. Before the next
-schema change, and no later than 2026-09-14, inspect the production marker shape
-and retained recovery artifacts. Remove the legacy readers after production and
-all eligible rollback points contain `schema_version`; retain evidence in the
-change's pull request. This section is the canonical tracking record. Unknown
-marker shapes fail closed. During replacement, a temporarily absent marker may
-use a warm isolate's last accepted cache generation, while a schema mismatch is
-always fatal.
+Only the exact versioned `export_meta` marker shape is accepted. Unknown marker
+shapes fail closed. During replacement, a temporarily absent marker may use a
+warm isolate's last accepted cache generation, while a schema mismatch is always
+fatal.
 
 ## Rollback
 

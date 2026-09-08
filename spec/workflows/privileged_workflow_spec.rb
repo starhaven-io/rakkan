@@ -106,13 +106,14 @@ RSpec.describe "privileged workflow security contracts" do
       "$expected_schema == $actual_schema",
       "rakkan-d1-recovery.json",
       "verify_d1_recovery_manifest.rb",
-      %q(column_names}" == '["generated_at"]'),
+      %q(column_names}" != '["generated_at","schema_version"]'),
       "environment: cloudflare-d1",
       "group: d1-production-write"
     )
     expect(rollback).not_to include(
       'sqlite3 "${EXPECTED_DB}" < "${sql_file}"',
-      "https://rakkan.dev/health/v1.json"
+      "https://rakkan.dev/health/v1.json",
+      %q(column_names}" == '["generated_at"]')
     )
   end
 
@@ -129,15 +130,17 @@ RSpec.describe "privileged workflow security contracts" do
       "index($actual) != null",
       ".compatibleVersions == $compatible",
       "index($health.schemaVersion)",
-      %q(names}" == '["generated_at"]'),
+      %q(names}" != '["generated_at","schema_version"]'),
       '"${status}" != "200"'
     )
-    expect(deploy).not_to include("LEGACY_EXPORT", '"${status}" == "404"')
+    expect(deploy).not_to include("LEGACY_EXPORT", '"${status}" == "404"', %q(names}" == '["generated_at"]'))
     expect(refresh).to include(
       "Verify deployed Worker accepts candidate schema",
       "https://rakkan.dev/health/v1.json",
-      "index($candidate_schema) != null"
+      "index($candidate_schema) != null",
+      %q(column_names}" != '["generated_at","schema_version"]')
     )
+    expect(refresh).not_to include(%q(column_names}" == '["generated_at"]'))
     expect(refresh.index("Verify deployed Worker accepts candidate schema"))
       .to be < refresh.index("Replace production data")
   end

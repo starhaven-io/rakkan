@@ -154,15 +154,12 @@ jobs:
           metadata="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json \
             --command='SELECT * FROM export_meta LIMIT 1')"
           metadata_row="$(jq -cer '.[0].results | select(length == 1) | .[0]' <<< "${metadata}")"
-          if [[ "${column_names}" == '["generated_at"]' ]]; then
-            schema_version=1
-          elif [[ "${column_names}" == '["generated_at","schema_version"]' ]]; then
-            schema_version="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
-              <<< "${metadata_row}")"
-          else
+          if [[ "${column_names}" != '["generated_at","schema_version"]' ]]; then
             echo "::error::production D1 has an unknown export_meta shape: ${column_names}"
             exit 1
           fi
+          schema_version="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
+            <<< "${metadata_row}")"
           generated_at="$(jq -er '.generated_at | select(type == "string" and length > 0)' \
             <<< "${metadata_row}")"
           counts_result="$(./node_modules/.bin/wrangler d1 execute rakkan --remote --json --command='
@@ -227,9 +224,6 @@ jobs:
               exit 1
             fi
           done
-
-      - name: Repair known mislabeled RubyGems history
-        run: bundle exec rake snapshot:repair_rubygems_history
 
       - name: Ingest registry changes
         run: timeout --signal=TERM --kill-after=30s 70m bash scripts/refresh-registry-data.sh

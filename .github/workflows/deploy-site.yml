@@ -71,15 +71,12 @@ jobs:
             select(.generated_at | type == "string" and
               test("^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?$"))' \
             <<< "${result}")"
-          if [[ "${names}" == '["generated_at"]' ]]; then
-            actual=1
-          elif [[ "${names}" == '["generated_at","schema_version"]' ]]; then
-            actual="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
-              <<< "${row}")"
-          else
+          if [[ "${names}" != '["generated_at","schema_version"]' ]]; then
             echo "::error::production D1 has an unknown export_meta shape: ${names}"
             exit 1
           fi
+          actual="$(jq -er '.schema_version | select(type == "number" and floor == . and . > 0)' \
+            <<< "${row}")"
           if ! jq -e --argjson actual "${actual}" 'index($actual) != null' <<< "${compatible}" >/dev/null; then
             echo "::error::production D1 schema ${actual} is not in the site compatibility set ${compatible}"
             exit 1

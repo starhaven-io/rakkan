@@ -31,8 +31,6 @@ against the gem and a trusted-publisher identity at push time, and rakkan
 deliberately treats the registry's verification as authoritative (deps.dev
 independently reports these attestations as verified). Counts here are
 therefore "attestations the registry accepted", not an independent audit.
-The rationale is recorded in
-[ADR 0001](docs/adr/0001-registry-accepted-provenance.md).
 
 ## Running it
 
@@ -134,10 +132,9 @@ Cloudflare environment or token. Site deployment is separate and performs a
 read-only D1 schema-contract check while holding the production transition
 lock before deploying the Worker, then verifies that the deployed health
 endpoint advertises the expected compatibility set. Every pre-deploy and
-post-deploy health check requires a successful response. The legacy one-column
-export marker remains readable as schema 1 for the documented recovery window.
-The Worker also exposes a D1-independent compatibility route so rollback can
-validate reader support even when the current database is unhealthy.
+post-deploy health check requires a successful response. The Worker also exposes
+a D1-independent compatibility route so rollback can validate reader support
+even when the current database is unhealthy.
 
 The measurable freshness contract is in
 [docs/data-freshness.md](docs/data-freshness.md). Hosted setup, schema rollout,
