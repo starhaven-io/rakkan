@@ -6,6 +6,9 @@ db/*.sqlite-wal
 db/*.sqlite-shm
 db/*.sqlite-journal
 db/d1_export.sql
+db/d1_export.sql.tmp
+db/d1_export.meta.json
+db/d1_export.meta.json.tmp
 site/node_modules/
 site/dist/
 coverage/

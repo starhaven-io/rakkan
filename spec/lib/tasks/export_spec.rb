@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "digest"
+require "json"
 require "rake"
 require "sqlite3"
 require "tmpdir"
@@ -34,14 +36,37 @@ RSpec.describe "export rake tasks", :db do
         .to_stdout
 
       export = File.join(dir, "db", "d1_export.sql")
+      metadata = File.join(dir, "db", "d1_export.meta.json")
+      manifest = JSON.parse(File.read(metadata, encoding: "UTF-8"))
       restored = SQLite3::Database.new(":memory:")
       restored.execute("PRAGMA foreign_keys = ON")
       sql = File.read(export, encoding: "UTF-8")
+      expect(manifest).to include(
+        "version" => 1,
+        "database" => "rakkan",
+        "schema_version" => 1,
+        "counts" => {
+          "registries" => 1,
+          "packages" => 1,
+          "package_versions" => 1,
+          "adoption_snapshots" => 1
+        },
+        "export_sha256" => Digest::SHA256.file(export).hexdigest
+      )
+      expect(manifest.keys.sort)
+        .to eq(%w[counts database export_sha256 generated_at schema_version version])
+      expect(manifest.fetch("generated_at")).to match(/\A\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}\z/)
       expect(sql.index("CREATE TABLE export_meta")).to be > sql.rindex("INSERT INTO adoption_snapshots")
+      marker_lines = sql.lines.last(2)
+      expect(marker_lines.fetch(0))
+        .to eq("CREATE TABLE export_meta (generated_at timestamp NOT NULL, schema_version integer NOT NULL);\n")
+      expect(marker_lines.fetch(1))
+        .to eq("INSERT INTO export_meta (generated_at, schema_version) " \
+               "VALUES ('#{manifest.fetch("generated_at")}', #{manifest.fetch("schema_version")});\n")
       2.times { restored.execute_batch(sql) }
 
       expect(restored.get_first_value("PRAGMA foreign_key_check")).to be_nil
-      expect(restored.get_first_value("SELECT generated_at FROM export_meta")).not_to be_nil
+      expect(restored.get_first_value("SELECT generated_at FROM export_meta")).to eq(manifest.fetch("generated_at"))
       expect(restored.get_first_value("SELECT schema_version FROM export_meta")).to eq(1)
       expect(restored.get_first_row("SELECT name, display_name FROM registries")).to eq(%w[rubygems RubyGems.org])
       expect(restored.get_first_row("SELECT name, tracked, rank FROM packages")).to eq(["psych", 1, 1])
@@ -51,6 +76,7 @@ RSpec.describe "export rake tasks", :db do
         .to eq(["2026-08-22", 1])
       expect(restored.get_first_value("SELECT COUNT(*) FROM package_versions")).to eq(1)
       expect(File.exist?("#{export}.tmp")).to be(false)
+      expect(File.exist?("#{metadata}.tmp")).to be(false)
     ensure
       restored&.close
     end

@@ -31,7 +31,7 @@ refresh n="50" registry="rubygems":
 snapshot registry="rubygems":
     HANAMI_LOG_LEVEL=info bundle exec rake "snapshot:take[{{ registry }}]"
 
-# Export the database for the Workers site's D1 (db/d1_export.sql)
+# Export the database and checksum-bound manifest for the Workers site's D1
 export-d1:
     HANAMI_LOG_LEVEL=info bundle exec rake export:d1
 

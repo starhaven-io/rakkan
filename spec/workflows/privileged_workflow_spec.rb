@@ -53,7 +53,8 @@ RSpec.describe "privileged workflow security contracts" do
     expect(dry_run).to include(
       "REGISTRY=rubygems timeout",
       "REGISTRY=cratesio timeout",
-      "bundle exec rake export:d1"
+      "bundle exec rake export:d1",
+      "verify_d1_export_manifest.rb"
     )
   end
 
@@ -195,5 +196,36 @@ RSpec.describe "privileged workflow security contracts" do
       "verify_d1_recovery_manifest.rb"
     )
     expect(refresh.index("rakkan-d1-recovery.json")).to be < refresh.index("Replace production data")
+  end
+
+  it "accepts production replacement only when the candidate identity and counts are readable" do
+    refresh = workflow("refresh-data.yml")
+
+    expect(refresh).to include(
+      "verify_d1_export_manifest.rb",
+      "db/d1_export.meta.json db/d1_export.sql",
+      'previous_generated_at="$(jq -er \'.generated_at\' "${D1_RECOVERY_MANIFEST}")"',
+      '[[ "${candidate_generated_at}" == "${previous_generated_at}" ]]',
+      "id: replace",
+      "--remote --file=../db/d1_export.sql --yes || import_exit_code=$?",
+      "IMPORT_EXIT_CODE: ${{ steps.replace.outputs.exit_code }}",
+      '[[ ! "${IMPORT_EXIT_CODE}" =~ ^[0-9]+$ ]]',
+      "if (( IMPORT_EXIT_CODE != 0 )); then",
+      "max_attempts=120",
+      ".generated_at == $expected.generated_at",
+      "D1 export artifacts changed or became invalid after replacement",
+      "could not read a valid production D1 state after replacement",
+      "production D1 generation or table counts do not match the exported candidate",
+      'if [[ -n "${last_result}" ]]; then',
+      "Last observed production state:",
+      "production matches the candidate generation and table counts",
+      "GITHUB_STEP_SUMMARY"
+    )
+    expect(refresh).to match(
+      /if \[\[ "\$\{verified\}" != true \]\]; then\n.*?exit 1\n\s+fi/m
+    )
+    expect(refresh.index("verify_d1_export_manifest.rb")).to be < refresh.index("id: replace")
+    expect(refresh.index("id: replace")).to be < refresh.index("Verify replacement")
+    expect(refresh).not_to include("--file=../db/d1_export.sql --yes > /dev/null")
   end
 end
