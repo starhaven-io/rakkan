@@ -43,6 +43,12 @@ When changing a tracked seed, use the registry builder and semantic checker.
 Never hand-edit a compressed seed. The normal path is a bot-opened seed pull
 request from a fixed automation branch.
 
+Dependabot alerts and security updates handle newly disclosed dependency
+vulnerabilities independently of CI and deployment. Full-tree dependency audits stay
+out of required gates so new advisories cannot block an unchanged lockfile.
+Run `npm --prefix site audit` or `bundle exec bundler-audit check --update`
+when investigating npm or Ruby dependency findings.
+
 ## Commits and pull requests
 
 Use Conventional Commit titles and sign every commit with DCO:
