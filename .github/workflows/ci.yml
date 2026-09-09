@@ -74,9 +74,6 @@ jobs:
       - name: ShellCheck
         run: shellcheck bin/setup scripts/*.sh
 
-      - name: Ruby dependency audit
-        run: bundle exec bundler-audit check --update
-
       - name: Restore typos cache
         id: typos-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -131,10 +128,6 @@ jobs:
         working-directory: site
         # Fail if an unreviewed dependency install script is introduced.
         run: npm ci --strict-allow-scripts
-
-      - name: npm dependency audit
-        working-directory: site
-        run: npm audit --audit-level=high
 
       - name: Prettier
         working-directory: site

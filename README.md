@@ -158,7 +158,7 @@ coverage thresholds, Ruby and site tests, RuboCop, ShellCheck, Prettier, Astro
 type checking and production build, npm install-script policy, strict Zizmor workflow collection,
 pinprick, and spelling. The test suites make no network calls: fixtures
 under `spec/fixtures/` are distilled from dump-derived seeds and recorded
-registry responses. Hosted dependency, CodeQL, and Codecov jobs remain hosted
+registry responses. Dependabot monitoring, CodeQL, and Codecov remain hosted
 evidence and are not implied by the local gate.
 
 `just check-tools` reports missing machine-wide audit executables with their
