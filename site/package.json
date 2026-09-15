@@ -24,12 +24,12 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.10",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.0",
     "c8": "12.0.0",
     "prettier": "^3.9.6",
     "prettier-plugin-astro": "^0.14.1",
     "typescript": "^6.0.3",
-    "wrangler": "4.129.0"
+    "wrangler": "4.129.1"
   },
   "allowScripts": {
     "esbuild": false,
