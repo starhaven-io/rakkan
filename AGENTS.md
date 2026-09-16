@@ -16,7 +16,7 @@ over assuming framework APIs.
 
 ## Project overview
 
-- **Stack:** two halves. The engine is headless Ruby (developed on 4.0.6):
+- **Stack:** two halves. The engine is headless Ruby (pinned in `.ruby-version`):
   Hanami 3.0.2 as container/persistence (ROM/Sequel on SQLite) driving
   ingestion via rake tasks; it has no web server. `site/` is the public web
   tier: Astro SSR on Cloudflare Workers reading D1,
