@@ -34,8 +34,8 @@ therefore "attestations the registry accepted", not an independent audit.
 
 ## Running it
 
-Two halves: a headless Ruby ingestion engine (Ruby ≥ 3.3 per the locked gems;
-developed on 4.0.6, pinned in `.ruby-version`) and a web tier under `site/`
+Two halves: a headless Ruby ingestion engine (Ruby ≥ 4.0.0;
+developed on the version pinned in `.ruby-version`) and a web tier under `site/`
 (Astro on Cloudflare Workers reading D1; Node ≥ 26). One command sets up both
 from a fresh clone: engine dependencies, databases, committed dump-derived
 seed data, site dependencies, and the local D1:
