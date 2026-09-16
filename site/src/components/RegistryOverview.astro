@@ -31,194 +31,191 @@ const registryUrl = safeHttpsUrl(registry?.url);
   title={slug === 'cratesio' && registry ? `${registry.display_name} · rakkan` : undefined}
   description={`Trusted publishing adoption among the most-downloaded ${packageWord} on ${registry?.display_name ?? 'the selected registry'}.`}
 >
-  {
-    !registry ? (
-      <section class="empty-state">
-        <h1>No data yet</h1>
-        <p>Package data is not available for this registry yet. Please check back later.</p>
+  {!registry ? (
+    <section class="empty-state">
+      <h1>No data yet</h1>
+      <p>Package data is not available for this registry yet. Please check back later.</p>
+    </section>
+  ) : !snapshot ? (
+    <section class="empty-state">
+      <h1>No complete snapshot yet</h1>
+      <p>
+        {registry.display_name} package data is loaded, but rakkan has not recorded an adoption point for an incomplete
+        provenance refresh.
+      </p>
+      <a href={site.packagesPath}>Browse the tracked packages →</a>
+    </section>
+  ) : (
+    <>
+      <section class="registry-hero">
+        <div class="hero-copy">
+          <h1>{registry.display_name}</h1>
+          <p>
+            Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)} {packageWord} by total
+            downloads. {site.adoptionDescription(singularPackage)}
+          </p>
+        </div>
+        <div class="hero-actions">
+          {registryUrl && (
+            <a class="url" href={registryUrl}>
+              {new URL(registryUrl).host} ↗
+            </a>
+          )}
+        </div>
       </section>
-    ) : !snapshot ? (
-      <section class="empty-state">
-        <h1>No complete snapshot yet</h1>
-        <p>
-          {registry.display_name} package data is loaded, but rakkan has not recorded an adoption point for an
-          incomplete provenance refresh.
-        </p>
-        <a href={site.packagesPath}>Browse the tracked packages →</a>
+
+      <section class="stats-grid" aria-label="Latest adoption snapshot">
+        <article class="stat-card featured">
+          <span class="stat-label">Package adoption</span>
+          <strong class="stat-value">{adoptionRate}%</strong>
+          <div class="progress-track" aria-hidden="true">
+            <div class="progress-fill" style={`width: ${adoptionRate}%`} />
+          </div>
+          <span class="stat-detail">
+            {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)} tracked {packageWord}
+          </span>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Adopted packages</span>
+          <strong class="stat-value">{formatCount(snapshot.provenant_packages)}</strong>
+          <span class="stat-detail">
+            {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one release carrying provenance
+          </span>
+        </article>
+        <article class="stat-card">
+          <span class="stat-label">Versions with provenance</span>
+          <strong class="stat-value">{formatCount(snapshot.provenant_versions)}</strong>
+          <span class="stat-detail">
+            {versionRate}% of {formatCount(snapshot.tracked_versions)} tracked versions
+          </span>
+        </article>
       </section>
-    ) : (
-      <>
-        <section class="registry-hero">
-          <div class="hero-copy">
-            <h1>{registry.display_name}</h1>
-            <p>
-              Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)} {packageWord} by total
-              downloads. {site.adoptionDescription(singularPackage)}
-            </p>
-          </div>
-          <div class="hero-actions">
-            {registryUrl && (
-              <a class="url" href={registryUrl}>
-                {new URL(registryUrl).host} ↗
-              </a>
-            )}
-          </div>
-        </section>
 
-        <section class="stats-grid" aria-label="Latest adoption snapshot">
-          <article class="stat-card featured">
-            <span class="stat-label">Package adoption</span>
-            <strong class="stat-value">{adoptionRate}%</strong>
-            <div class="progress-track" aria-hidden="true">
-              <div class="progress-fill" style={`width: ${adoptionRate}%`} />
-            </div>
-            <span class="stat-detail">
-              {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)} tracked{' '}
-              {packageWord}
-            </span>
-          </article>
-          <article class="stat-card">
-            <span class="stat-label">Adopted packages</span>
-            <strong class="stat-value">{formatCount(snapshot.provenant_packages)}</strong>
-            <span class="stat-detail">
-              {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one release carrying provenance
-            </span>
-          </article>
-          <article class="stat-card">
-            <span class="stat-label">Versions with provenance</span>
-            <strong class="stat-value">{formatCount(snapshot.provenant_versions)}</strong>
-            <span class="stat-detail">
-              {versionRate}% of {formatCount(snapshot.tracked_versions)} tracked versions
-            </span>
-          </article>
-        </section>
+      <section class="panel">
+        <header class="panel-header">
+          <div>
+            <h2>Adoption over time</h2>
+            <p>{site.historyDescription}</p>
+          </div>
+          <span class="panel-meta">
+            {series.length} {series.length === 1 ? 'point' : 'points'}
+          </span>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <caption class="visually-hidden">Historical publishing-provenance adoption snapshots</caption>
+            <thead>
+              <tr>
+                <th>Date (UTC)</th>
+                <th class="num">Packages with provenance</th>
+                <th class="num">Adoption</th>
+                <th class="num hide-mobile">Versions with provenance</th>
+              </tr>
+            </thead>
+            <tbody>
+              {series.map((snap) => {
+                const rate = percentage(snap.provenant_packages, snap.tracked_packages);
+                return (
+                  <tr>
+                    <td class="date-cell">{shortDate(snap.taken_on)}</td>
+                    <td class="num">
+                      {formatCount(snap.provenant_packages)} / {formatCount(snap.tracked_packages)}
+                    </td>
+                    <td class="num">
+                      <div class="trend-value">
+                        <div class="trend-bar" aria-hidden="true">
+                          <span style={`width: ${rate}%`} />
+                        </div>
+                        <strong>{rate}%</strong>
+                      </div>
+                    </td>
+                    <td class="num hide-mobile">{formatCount(snap.provenant_versions)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </section>
 
+      <div class="content-grid">
         <section class="panel">
           <header class="panel-header">
             <div>
-              <h2>Adoption over time</h2>
-              <p>{site.historyDescription}</p>
+              <h2>Recently adopted</h2>
+              <p>Ordered by first release with provenance.</p>
             </div>
-            <span class="panel-meta">
-              {series.length} {series.length === 1 ? 'point' : 'points'}
-            </span>
           </header>
           <div class="table-wrap">
             <table>
-              <caption class="visually-hidden">Historical publishing-provenance adoption snapshots</caption>
+              <caption class="visually-hidden">Packages most recently observed publishing with provenance</caption>
               <thead>
                 <tr>
-                  <th>Date (UTC)</th>
-                  <th class="num">Packages with provenance</th>
-                  <th class="num">Adoption</th>
-                  <th class="num hide-mobile">Versions with provenance</th>
+                  <th>Package</th>
+                  <th class="num">Rank</th>
+                  <th class="num">Since</th>
                 </tr>
               </thead>
               <tbody>
-                {series.map((snap) => {
-                  const rate = percentage(snap.provenant_packages, snap.tracked_packages);
-                  return (
-                    <tr>
-                      <td class="date-cell">{shortDate(snap.taken_on)}</td>
-                      <td class="num">
-                        {formatCount(snap.provenant_packages)} / {formatCount(snap.tracked_packages)}
-                      </td>
-                      <td class="num">
-                        <div class="trend-value">
-                          <div class="trend-bar" aria-hidden="true">
-                            <span style={`width: ${rate}%`} />
-                          </div>
-                          <strong>{rate}%</strong>
-                        </div>
-                      </td>
-                      <td class="num hide-mobile">{formatCount(snap.provenant_versions)}</td>
-                    </tr>
-                  );
-                })}
+                {conversions.map((pkg) => (
+                  <tr>
+                    <td>
+                      <a class="package-name" href={site.packagePath(pkg.name)}>
+                        {pkg.name}
+                      </a>
+                    </td>
+                    <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                    <td class="num date-cell">{shortDate(pkg.first_provenant_at)}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
         </section>
 
-        <div class="content-grid">
-          <section class="panel">
-            <header class="panel-header">
-              <div>
-                <h2>Recently adopted</h2>
-                <p>Ordered by first release with provenance.</p>
-              </div>
-            </header>
-            <div class="table-wrap">
-              <table>
-                <caption class="visually-hidden">Packages most recently observed publishing with provenance</caption>
-                <thead>
-                  <tr>
-                    <th>Package</th>
-                    <th class="num">Rank</th>
-                    <th class="num">Since</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {conversions.map((pkg) => (
-                    <tr>
-                      <td>
-                        <a class="package-name" href={site.packagePath(pkg.name)}>
-                          {pkg.name}
-                        </a>
-                      </td>
-                      <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
-                      <td class="num date-cell">{shortDate(pkg.first_provenant_at)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+        <section class="panel">
+          <header class="panel-header">
+            <div>
+              <h2>Most downloaded</h2>
+              <p>The head of the tracked set.</p>
             </div>
-          </section>
-
-          <section class="panel">
-            <header class="panel-header">
-              <div>
-                <h2>Most downloaded</h2>
-                <p>The head of the tracked set.</p>
-              </div>
-              <span class="panel-meta">
-                <a href={site.packagesPath}>browse all →</a>
-              </span>
-            </header>
-            <div class="table-wrap">
-              <table>
-                <caption class="visually-hidden">Most-downloaded tracked packages and provenance status</caption>
-                <thead>
+            <span class="panel-meta">
+              <a href={site.packagesPath}>browse all →</a>
+            </span>
+          </header>
+          <div class="table-wrap">
+            <table>
+              <caption class="visually-hidden">Most-downloaded tracked packages and provenance status</caption>
+              <thead>
+                <tr>
+                  <th>Package</th>
+                  <th class="num">Rank</th>
+                  <th class="num">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {top.map((pkg) => (
                   <tr>
-                    <th>Package</th>
-                    <th class="num">Rank</th>
-                    <th class="num">Status</th>
+                    <td>
+                      <a class="package-name" href={site.packagePath(pkg.name)}>
+                        {pkg.name}
+                      </a>
+                    </td>
+                    <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+                    <td class="num">
+                      {pkg.first_provenant_at ? (
+                        <span class="badge yes">With provenance</span>
+                      ) : (
+                        <span class="badge neutral">Not yet</span>
+                      )}
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {top.map((pkg) => (
-                    <tr>
-                      <td>
-                        <a class="package-name" href={site.packagePath(pkg.name)}>
-                          {pkg.name}
-                        </a>
-                      </td>
-                      <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
-                      <td class="num">
-                        {pkg.first_provenant_at ? (
-                          <span class="badge yes">With provenance</span>
-                        ) : (
-                          <span class="badge neutral">Not yet</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        </div>
-      </>
-    )
-  }
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+    </>
+  )}
 </Base>
