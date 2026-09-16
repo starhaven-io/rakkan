@@ -29,8 +29,7 @@ const noun = packageNoun(registry?.name, 2);
     <h1>All tracked {noun}</h1>
     <p>
       The full tracked set: the top {formatCount(summary.total)}
-      {noun} on{' '}
-      {registry?.display_name ?? 'the registry'} by total downloads, in rank order.{' '}
+      {noun} on {registry?.display_name ?? 'the registry'} by total downloads, in rank order.{' '}
       {formatCount(summary.provenant)} carry provenance on at least one release.
     </p>
   </header>
@@ -38,9 +37,9 @@ const noun = packageNoun(registry?.name, 2);
   <section class="panel">
     <div class="table-wrap">
       <table>
-        <caption class="visually-hidden"
-          >{registry?.display_name ?? 'Registry'} tracked packages in download-rank order</caption
-        >
+        <caption class="visually-hidden">
+          {`${registry?.display_name ?? 'Registry'} tracked packages in download-rank order`}
+        </caption>
         <thead>
           <tr>
             <th class="num">Rank</th>
@@ -50,38 +49,34 @@ const noun = packageNoun(registry?.name, 2);
           </tr>
         </thead>
         <tbody>
-          {
-            packages.map((pkg) => (
-              <tr>
-                <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
-                <td>
-                  <a class="package-name" href={site.packagePath(pkg.name)}>
-                    {pkg.name}
-                  </a>
-                </td>
-                <td class="num hide-mobile">{formatCount(pkg.downloads_total ?? 0)}</td>
-                <td class="num">
-                  {pkg.first_provenant_at ? (
-                    <span class="badge yes">Since {shortDate(pkg.first_provenant_at)}</span>
-                  ) : (
-                    <span class="badge neutral">Not observed</span>
-                  )}
-                </td>
-              </tr>
-            ))
-          }
+          {packages.map((pkg) => (
+            <tr>
+              <td class="num">#{formatCount(pkg.rank ?? 0)}</td>
+              <td>
+                <a class="package-name" href={site.packagePath(pkg.name)}>
+                  {pkg.name}
+                </a>
+              </td>
+              <td class="num hide-mobile">{formatCount(pkg.downloads_total ?? 0)}</td>
+              <td class="num">
+                {pkg.first_provenant_at ? (
+                  <span class="badge yes">Since {shortDate(pkg.first_provenant_at)}</span>
+                ) : (
+                  <span class="badge neutral">Not observed</span>
+                )}
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
-    {
-      packagePage && (
-        <Pagination
-          path={site.packagesPath}
-          page={packagePage.page}
-          pageCount={packagePage.pageCount}
-          label={`${registry?.display_name ?? 'Registry'} package pages`}
-        />
-      )
-    }
+    {packagePage && (
+      <Pagination
+        path={site.packagesPath}
+        page={packagePage.page}
+        pageCount={packagePage.pageCount}
+        label={`${registry?.display_name ?? 'Registry'} package pages`}
+      />
+    )}
   </section>
 </Base>
