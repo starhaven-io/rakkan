@@ -61,8 +61,10 @@ counts for publication readback.
 
 The Astro Worker reads D1 but never writes it. The middleware checks the schema
 contract before serving an edge-cached generation. A mismatch is fatal, not a
-stale-cache fallback. A marker temporarily absent during replacement can use a
-warm isolate's last accepted generation, but an unknown marker shape cannot.
+stale-cache fallback. A marker temporarily unreadable during replacement lets a
+warm isolate serve pages already cached under its last accepted generation, but
+anything it renders then is not stored, because D1 may already hold a newer
+export. An unknown marker shape cannot fall back at all.
 Only the exact versioned marker shape is accepted. Heavy package and version
 lists are paginated and capped; edge cache keys discard arbitrary query
 parameters and retain only the bounded canonical page.

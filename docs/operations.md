@@ -147,9 +147,10 @@ still be replaced by a fix or revert merged to `main`. The post-deploy health
 check requires HTTP 200.
 
 Only the exact versioned `export_meta` marker shape is accepted. Unknown marker
-shapes fail closed. During replacement, a temporarily absent marker may use a
-warm isolate's last accepted cache generation, while a schema mismatch is always
-fatal.
+shapes fail closed. During replacement, a temporarily unreadable marker lets a
+warm isolate serve pages already cached under its last accepted generation, but
+pages rendered in that state are never stored under it, so a later rollback to
+that generation cannot surface newer data. A schema mismatch is always fatal.
 
 ## Rollback
 

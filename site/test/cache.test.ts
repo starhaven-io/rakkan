@@ -11,8 +11,13 @@ import {
   serveVersionedPage,
   versionedCacheKey,
   type EdgeCache,
+  type Generation,
 } from '../src/lib/cache.ts';
 import { ExportUnavailableError, SchemaVersionError } from '../src/lib/d1.ts';
+
+function confirmedGeneration(generatedAt: string): Generation {
+  return { generatedAt, confirmed: true };
+}
 
 test('route-owned not-found responses set status and opt out of the generation cache', () => {
   const response = { status: 200, headers: new Headers() };
@@ -44,9 +49,9 @@ test('a new data generation bypasses the prior rendered page', async () => {
     return new Response(body);
   };
 
-  const first = await serveVersionedPage(cache, url, '2026-08-22 06:58:00', render('old'));
-  const repeat = await serveVersionedPage(cache, url, '2026-08-22 06:58:00', render('wrong'));
-  const refreshed = await serveVersionedPage(cache, url, '2026-08-22 17:28:00', render('new'));
+  const first = await serveVersionedPage(cache, url, confirmedGeneration('2026-08-22 06:58:00'), render('old'));
+  const repeat = await serveVersionedPage(cache, url, confirmedGeneration('2026-08-22 06:58:00'), render('wrong'));
+  const refreshed = await serveVersionedPage(cache, url, confirmedGeneration('2026-08-22 17:28:00'), render('new'));
 
   assert.equal(await first.text(), 'old');
   assert.equal(await repeat.text(), 'old');
@@ -73,13 +78,13 @@ test('attacker-controlled query variants share one rendered cache entry', async 
   const first = await serveVersionedPage(
     cache,
     'https://rakkan.dev/packages/rake?nonce=one',
-    '2026-08-22 17:28:00',
+    confirmedGeneration('2026-08-22 17:28:00'),
     render,
   );
   const second = await serveVersionedPage(
     cache,
     'https://rakkan.dev/packages/rake?nonce=two&nonce=three',
-    '2026-08-22 17:28:00',
+    confirmedGeneration('2026-08-22 17:28:00'),
     render,
   );
 
@@ -115,7 +120,7 @@ test('a route-provided cache policy opts out of the shared cache', async () => {
   const response = await serveVersionedPage(
     cache,
     'https://rakkan.dev/',
-    '2026-08-22 17:28:00',
+    confirmedGeneration('2026-08-22 17:28:00'),
     async () => new Response('private', { headers: { 'cache-control': 'private' } }),
   );
 
@@ -128,7 +133,7 @@ test('non-successful responses are not cached or rewritten', async () => {
   const response = await serveVersionedPage(
     cache,
     'https://rakkan.dev/',
-    '2026-08-22 17:28:00',
+    confirmedGeneration('2026-08-22 17:28:00'),
     async () => new Response('unavailable', { status: 503 }),
   );
 
@@ -157,13 +162,20 @@ test('the generation tracker falls back only after observing a generation', asyn
     }, mayFallback),
     null,
   );
-  assert.equal(await tracker.current(async () => '2026-08-22 17:28:00'), '2026-08-22 17:28:00');
-  assert.equal(
+  assert.deepEqual(
+    await tracker.current(async () => '2026-08-22 17:28:00'),
+    confirmedGeneration('2026-08-22 17:28:00'),
+  );
+  assert.deepEqual(
     await tracker.current(async () => {
       throw new ExportUnavailableError('D1 unavailable');
     }, mayFallback),
-    '2026-08-22 17:28:00',
+    { generatedAt: '2026-08-22 17:28:00', confirmed: false },
   );
+  assert.deepEqual(await tracker.current(async () => null), {
+    generatedAt: '2026-08-22 17:28:00',
+    confirmed: false,
+  });
 });
 
 test('a warm generation serves its cached page while the acceptance marker is absent', async () => {
@@ -185,6 +197,32 @@ test('a warm generation serves its cached page while the acceptance marker is ab
 
   assert.equal(await response.text(), 'accepted generation');
   assert.equal(renders, 1);
+});
+
+test('a page rendered under a fallback generation is served but never stored under it', async () => {
+  const tracker = new GenerationTracker();
+  const cache = new MemoryCache();
+  const url = 'https://rakkan.dev/packages/rake';
+  const mayFallback = (error: unknown) => !(error instanceof SchemaVersionError);
+  const g1 = await tracker.current(async () => '2026-08-22 06:58:00', mayFallback);
+  await serveVersionedPage(cache, url, g1, async () => new Response('G1 page'));
+  cache.entries.clear();
+
+  // The marker read fails, then the replacement completes before the page queries run.
+  const fallback = await tracker.current(async () => {
+    throw new ExportUnavailableError('D1 unavailable');
+  }, mayFallback);
+  const during = await serveVersionedPage(cache, url, fallback, async () => new Response('G2 page'));
+
+  assert.equal(await during.text(), 'G2 page');
+  assert.equal(during.headers.get('cache-control'), null);
+  assert.equal(cache.entries.size, 0);
+
+  // A Time Travel rollback restores G1; its key must not hold G2 content.
+  const restored = await tracker.current(async () => '2026-08-22 06:58:00', mayFallback);
+  const afterRollback = await serveVersionedPage(cache, url, restored, async () => new Response('G1 page'));
+
+  assert.equal(await afterRollback.text(), 'G1 page');
 });
 
 test('the generation tracker does not hide errors classified as fatal', async () => {
