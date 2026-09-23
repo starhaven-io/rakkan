@@ -42,21 +42,39 @@ RSpec.describe Ingestion::Operations::TakeSnapshot, :db do
     ENV["TZ"] = old_tz
   end
 
+  let(:psych_waiver) do
+    Ingestion::ProvenanceWaivers::Entry.new(
+      registry: "rubygems", package: "psych", number: "5.1.0", platform: "ruby",
+      reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
+    )
+  end
+
   it "excludes unresolved exact 404 waivers from the version denominator" do
     registry = create_registry!
     pkg = create_package!(registry, name: "psych")
     create_version!(pkg, number: "5.1.0", provenance_checked_at: nil)
-    entry = Ingestion::ProvenanceWaivers::Entry.new(
-      registry: "rubygems", package: "psych", number: "5.1.0", platform: "ruby",
-      reason: "Registry permanently omits this historical version", expires_on: Date.new(2026, 12, 1)
-    )
     expect(Ingestion::ProvenanceWaivers).to receive(:load)
       .with(today: Date.new(2026, 9, 7))
-      .and_return(Ingestion::ProvenanceWaivers.new([entry]))
+      .and_return(Ingestion::ProvenanceWaivers.new([psych_waiver]))
 
     result = operation.call(taken_on: Date.new(2026, 9, 7))
 
     expect(result.value!).to include(tracked_versions: 0, provenant_versions: 0)
+  end
+
+  it "counts a waived version again once the registry has answered for it" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    create_version!(
+      pkg, number: "5.1.0", provenance_checked_at: Time.utc(2026, 9, 6),
+           provenance: { provenance_kind: "sigstore_attestation", attestation_count: 1 }
+    )
+
+    result = operation.call(
+      taken_on: Date.new(2026, 9, 7), waivers: Ingestion::ProvenanceWaivers.new([psych_waiver])
+    )
+
+    expect(result.value!).to include(tracked_versions: 1, provenant_versions: 1)
   end
 
   it "fails cleanly for an unknown registry" do
