@@ -36,8 +36,9 @@ function edgeCache(): Cache | undefined {
   return (globalThis as { caches?: { default?: Cache } }).caches?.default;
 }
 
-// A warm isolate can keep serving its last edge generation through a transient
-// D1 lookup failure. A cold isolate has no generation to guess from.
+// A warm isolate can keep serving cached pages of its last edge generation
+// through a transient D1 lookup failure, but never stores a page under it.
+// A cold isolate has no generation to guess from.
 const generationTracker = new GenerationTracker();
 
 export const onRequest = defineMiddleware(async (context, next) => {
@@ -58,9 +59,9 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
   if (!cache) return render();
 
-  const generatedAt = await generationTracker.current(
+  const generation = await generationTracker.current(
     () => exportGeneratedAt(getDb()),
     (error) => !(error instanceof SchemaVersionError),
   );
-  return serveVersionedPage(cache, context.url, generatedAt, render);
+  return serveVersionedPage(cache, context.url, generation, render);
 });

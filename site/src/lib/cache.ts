@@ -43,21 +43,28 @@ export function markRouteNotFound(response: MutableResponse): void {
   response.headers.set('cache-control', NOT_FOUND_CACHE_CONTROL);
 }
 
+export interface Generation {
+  generatedAt: string;
+  confirmed: boolean;
+}
+
 export class GenerationTracker {
   #lastGeneration: string | null = null;
 
   async current(
     load: () => Promise<string | null>,
     mayFallback: (error: unknown) => boolean = () => true,
-  ): Promise<string | null> {
+  ): Promise<Generation | null> {
     try {
       const generatedAt = await load();
-      if (generatedAt !== null) this.#lastGeneration = generatedAt;
-      return generatedAt ?? this.#lastGeneration;
+      if (generatedAt !== null) {
+        this.#lastGeneration = generatedAt;
+        return { generatedAt, confirmed: true };
+      }
     } catch (error) {
       if (!mayFallback(error)) throw error;
-      return this.#lastGeneration;
     }
+    return this.#lastGeneration === null ? null : { generatedAt: this.#lastGeneration, confirmed: false };
   }
 }
 
@@ -84,16 +91,20 @@ function browserResponse(response: Response): Response {
 export async function serveVersionedPage(
   cache: EdgeCache,
   requestUrl: string | URL,
-  generatedAt: string | null,
+  generation: Generation | null,
   render: () => Promise<Response>,
 ): Promise<Response> {
-  if (!generatedAt) return render();
+  if (!generation) return render();
 
-  const key = versionedCacheKey(requestUrl, generatedAt);
+  const key = versionedCacheKey(requestUrl, generation.generatedAt);
   const hit = await cache.match(key);
   if (hit) return browserResponse(hit);
 
   const response = await render();
+  // A fallback generation only names what this isolate last saw. D1 may
+  // already hold a newer export, so storing this render under the old key
+  // would resurface newer data if that generation is ever restored.
+  if (!generation.confirmed) return response;
   if (response.status !== 200 || response.headers.has('cache-control')) return response;
 
   const stored = response.clone();
