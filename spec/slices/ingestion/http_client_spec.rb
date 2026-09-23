@@ -205,10 +205,12 @@ RSpec.describe Ingestion::HTTPClient do
         .to raise_error(described_class::Error, /returned more than 5 bytes/)
     end
 
-    it "rejects non-HTTPS and credential-bearing URLs before transport" do
+    it "rejects non-HTTPS, credential-bearing, and nonstandard-port URLs before transport" do
       expect { client.get_json("http://rubygems.org/api/v1/versions.json", ttl: 0) }
         .to raise_error(described_class::Error, /not an approved HTTPS URL/)
       expect { client.get_json("https://user:pass@rubygems.org/api/v1/versions.json", ttl: 0) }
+        .to raise_error(described_class::Error, /not an approved HTTPS URL/)
+      expect { client.get_json("https://rubygems.org:8443/api/v1/versions.json", ttl: 0) }
         .to raise_error(described_class::Error, /not an approved HTTPS URL/)
     end
 
