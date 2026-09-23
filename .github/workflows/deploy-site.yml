@@ -54,6 +54,8 @@ jobs:
         working-directory: site
         run: npm ci --strict-allow-scripts
 
+      # Read D1 directly, not through the deployed Worker's health route, so a
+      # broken Worker cannot block deploying its replacement.
       - name: Verify deployed schema compatibility
         working-directory: site
         env:
@@ -109,21 +111,6 @@ jobs:
         working-directory: site
         # Fail if an unreviewed dependency install script is introduced.
         run: npm ci --strict-allow-scripts
-
-      - name: Reverify production schema compatibility
-        run: |
-          health_file="${RUNNER_TEMP}/predeploy-health.json"
-          status="$(curl --show-error --silent --retry 5 --retry-delay 5 --retry-all-errors \
-            --output "${health_file}" --write-out '%{http_code}' https://rakkan.dev/health/v1.json)"
-          if [[ "${status}" != "200" ]]; then
-            echo "::error::production health check returned HTTP ${status}"
-            exit 1
-          fi
-          jq -e --argjson compatible "$(jq -cer .compatibleVersions site/schema-contract.json)" '
-            . as $health |
-            $health.status == "ok" and
-            ($compatible | index($health.schemaVersion)) != null
-          ' "${health_file}" >/dev/null
 
       - name: Build site
         working-directory: site

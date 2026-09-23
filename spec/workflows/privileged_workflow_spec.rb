@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "yaml"
+
 RSpec.describe "privileged workflow security contracts" do
   def workflow(name)
     File.read(Hanami.app.root.join(".github", "workflows", name), encoding: "UTF-8")
@@ -131,8 +133,7 @@ RSpec.describe "privileged workflow security contracts" do
       "index($actual) != null",
       ".compatibleVersions == $compatible",
       "index($health.schemaVersion)",
-      %q(names}" != '["generated_at","schema_version"]'),
-      '"${status}" != "200"'
+      %q(names}" != '["generated_at","schema_version"]')
     )
     expect(deploy).not_to include("LEGACY_EXPORT", '"${status}" == "404"', %q(names}" == '["generated_at"]'))
     expect(refresh).to include(
@@ -144,6 +145,20 @@ RSpec.describe "privileged workflow security contracts" do
     expect(refresh).not_to include(%q(column_names}" == '["generated_at"]'))
     expect(refresh.index("Verify deployed Worker accepts candidate schema"))
       .to be < refresh.index("Replace production data")
+  end
+
+  it "gates Worker deployment on production D1 rather than on the Worker being replaced" do
+    deploy = YAML.safe_load_file(Hanami.app.root.join(".github", "workflows", "deploy-site.yml"))
+    jobs = deploy.fetch("jobs")
+    steps = jobs.fetch("deploy").fetch("steps")
+    deploy_index = steps.index { |step| step["name"] == "Deploy to Cloudflare Workers" }
+    scripts = ->(selected) { selected.filter_map { |step| step["run"] }.join("\n") }
+
+    expect(deploy_index).not_to be_nil
+    expect(jobs.fetch("deploy").fetch("needs")).to eq("schema")
+    expect(scripts.call(jobs.fetch("schema").fetch("steps"))).to include("wrangler d1 execute rakkan --remote")
+    expect(scripts.call(steps.first(deploy_index))).not_to include("rakkan.dev")
+    expect(scripts.call(steps.drop(deploy_index + 1))).to include("https://rakkan.dev/health/v1.json")
   end
 
   it "retries the RubyGems updater after a late Monday dump" do

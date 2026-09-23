@@ -141,7 +141,10 @@ health response exposes both its current database version and the Worker's
 compatibility set; `Refresh Data` checks that set before replacement. The
 runtime also fails closed if an incompatible database reaches it.
 
-Every pre-deploy and post-deploy health check requires HTTP 200.
+The pre-deploy contract check reads D1 with the read-only token rather than
+through the deployed Worker, so a Worker that fails its own health route can
+still be replaced by a fix or revert merged to `main`. The post-deploy health
+check requires HTTP 200.
 
 Only the exact versioned `export_meta` marker shape is accepted. Unknown marker
 shapes fail closed. During replacement, a temporarily absent marker may use a
@@ -172,9 +175,10 @@ For a bad data replacement:
 5. Record the incident and repair the source pipeline before re-enabling the
    schedule.
 
-For a bad Worker deployment, redeploy a known-good `main` revision only after
-its schema compatibility set is confirmed against production D1. Do not fix a
-Worker/data mismatch by bypassing the schema preflight.
+For a bad Worker deployment, revert or fix it on `main`; `Deploy Site` confirms
+the new revision's compatibility set against production D1 before redeploying,
+even while the current Worker is failing. Do not fix a Worker/data mismatch by
+bypassing the schema preflight.
 
 Workflow artifacts are retained for seven days, and Time Travel is bounded by
 the Cloudflare account's retention window. The raw SQL export is not directly
