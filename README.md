@@ -131,7 +131,8 @@ Push-triggered refresh dry runs use a fresh local database and receive no
 Cloudflare environment or token. Site deployment is separate and performs a
 read-only D1 schema-contract check while holding the production transition
 lock before deploying the Worker, then verifies that the deployed health
-endpoint advertises the expected compatibility set. Every pre-deploy and
+endpoint advertises the expected compatibility set. The pre-deploy check reads
+D1 directly, so an unhealthy Worker never blocks deploying its replacement; the
 post-deploy health check requires a successful response. The Worker also exposes
 a D1-independent compatibility route so rollback can validate reader support
 even when the current database is unhealthy.
