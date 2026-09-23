@@ -100,7 +100,9 @@ local export. Immediately before replacement it also requires the deployed
 Worker's uncached health response to advertise support for the candidate schema.
 Worker deployment, refresh replacement, and rollback are serialized under one
 production schema-transition lock. Push-triggered dry runs use a fresh local
-database and have no Cloudflare environment or token.
+database and have no Cloudflare environment or token. They cap crates.io at
+five provenance lookups per attempt, because a fresh database would otherwise
+restart that registry's whole backfill against the live API on every push.
 
 Persistent registry 404s are not silently converted to no-provenance results.
 First confirm that the exact version is non-yanked and permanently absent, then
