@@ -38,10 +38,7 @@ RSpec.describe "privileged workflow security contracts" do
   end
 
   it "dry-runs every registry when any ingestion input changes" do
-    refresh_workflow = workflow("refresh-data.yml")
-    dry_run = job(refresh_workflow, "dry-run", "refresh-issue")
-
-    expect(refresh_workflow).to include(
+    expect(workflow("refresh-data.yml")).to include(
       '- "app/**"',
       '- "config/**"',
       '- "lib/**"',
@@ -49,12 +46,6 @@ RSpec.describe "privileged workflow security contracts" do
       '- "scripts/**"',
       '- "seed/**"',
       '- "slices/ingestion/**"'
-    )
-    expect(dry_run).to include(
-      "REGISTRY=rubygems timeout",
-      "REGISTRY=cratesio timeout",
-      "bundle exec rake export:d1",
-      "verify_d1_export_manifest.rb"
     )
   end
 

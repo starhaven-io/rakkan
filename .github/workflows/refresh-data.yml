@@ -382,7 +382,6 @@ jobs:
     env:
       DATABASE_URL: sqlite://db/rakkan.sqlite
       HANAMI_ENV: production
-      REFRESH_LIMIT: "250"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -397,11 +396,14 @@ jobs:
       - name: Prepare fresh engine database
         run: bundle exec hanami db prepare
 
+      # RubyGems needs its post-dump backlog checked to record the snapshot the
+      # export verifier requires. A fresh database restarts crates.io's whole
+      # backfill, so a few lookups exercise that path without re-crawling it.
       - name: Exercise ingestion and export without production credentials
         run: |
-          REGISTRY=rubygems timeout --signal=TERM --kill-after=30s 15m \
+          REGISTRY=rubygems REFRESH_LIMIT=250 timeout --signal=TERM --kill-after=30s 15m \
             bash scripts/refresh-registry-data.sh
-          REGISTRY=cratesio timeout --signal=TERM --kill-after=30s 15m \
+          REGISTRY=cratesio REFRESH_LIMIT=5 timeout --signal=TERM --kill-after=30s 15m \
             bash scripts/refresh-registry-data.sh
           bundle exec rake export:d1
           bundle exec ruby scripts/verify_d1_export_manifest.rb \
