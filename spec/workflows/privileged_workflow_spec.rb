@@ -156,12 +156,12 @@ RSpec.describe "privileged workflow security contracts" do
     expect(workflow("update-rubygems-seed.yml")).to include('- cron: "30 03 * * 2"')
   end
 
-  it "binds post-merge seed refreshes to the reviewed merge SHA" do
-    %w[
-      refresh-cratesio-after-seed-merge.yml
-      refresh-rubygems-after-seed-merge.yml
-    ].each do |name|
-      listener = workflow(name)
+  it "binds post-merge seed refreshes to the reviewed merge SHA and their own registry" do
+    expect(workflow("refresh-data.yml")).to include(
+      "run-name: Refresh Data (${{ inputs.registry || 'rubygems' }}) [${{ inputs.request_id || github.run_id }}]"
+    )
+    %w[cratesio rubygems].each do |registry|
+      listener = workflow("refresh-#{registry}-after-seed-merge.yml")
       expect(listener).to include(
         "github.repository == 'starhaven-io/rakkan'",
         "MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}",
@@ -170,12 +170,13 @@ RSpec.describe "privileged workflow security contracts" do
         "($files | length) >= 1",
         '--field authorized_sha="${main_sha}"',
         '--field request_id="${request_id}"',
-        "--field registry=all",
+        "--field registry=#{registry} \\",
+        %(title="Refresh Data (#{registry}) [${request_id}]"),
         'timeout 150m gh run watch "${refresh_run_id}"',
         "--json status,conclusion,jobs",
         '"${status}" != "completed"'
       )
-      expect(listener).not_to include('.status == "in_progress" or .status == "queued"')
+      expect(listener).not_to include("registry=all", '.status == "in_progress" or .status == "queued"')
     end
   end
 

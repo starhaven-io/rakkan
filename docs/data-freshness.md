@@ -41,8 +41,7 @@ content changes fail closed.
 - Registry transport failures are retried within a bounded budget and are not
   converted into negative provenance observations.
 - RubyGems discovery and provenance refresh each get at most three resumable
-  attempts. The protected all-registry ingestion step has a 70-minute
-  wall-clock limit.
+  attempts. The protected ingestion step has a 70-minute wall-clock limit.
 - A provenance refresh may persist its checked rows and remaining cursor, but
   it does not create a partial snapshot for either registry.
 - A failure before replacement leaves production D1 unchanged. Replacement is

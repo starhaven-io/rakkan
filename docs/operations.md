@@ -71,10 +71,14 @@ post-merge listener accepts only the expected repository, `main` base, fixed
 automation branch, seed-only file set, and exact merge SHA. It requires that
 merge to remain an ancestor of current `main`, authorizes one immutable current
 SHA, and watches the protected refresh until completion or its bounded wait
-expires. A cancelled or skipped dispatch is retried. Each listener requests an
-all-registry refresh. The shared production concurrency group retains up to 100
-pending deploys, refreshes, and rollbacks, preventing two listeners from
-replacing each other's child runs. The listener waits for a bounded period; if
+expires. A cancelled or skipped dispatch is retried. Each listener requests a
+refresh of its own registry only. Every run restores current production first,
+so the other registry is republished unchanged, and a failure in one registry
+cannot discard the other's completed refresh. The `all` choice remains for
+manual dispatch and is all-or-nothing. The shared production concurrency group
+retains up to 100 pending deploys, refreshes, and rollbacks, preventing two
+listeners from replacing each other's child runs. The listener waits for a
+bounded period; if
 the child is still queued, pending, requested, or waiting for environment
 approval, that protected child remains authoritative and reports its own
 eventual result.
