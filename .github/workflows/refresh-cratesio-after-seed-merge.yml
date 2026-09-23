@@ -69,11 +69,11 @@ jobs:
             fi
 
             request_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${attempt}"
-            title="Refresh Data (all) [${request_id}]"
+            title="Refresh Data (cratesio) [${request_id}]"
             gh workflow run refresh-data.yml \
               --repo "${REPOSITORY}" \
               --ref main \
-              --field registry=all \
+              --field registry=cratesio \
               --field refresh_limit=1000 \
               --field authorized_sha="${main_sha}" \
               --field request_id="${request_id}"
@@ -132,5 +132,5 @@ jobs:
             echo
             echo "Protected refresh run: ${refresh_run_id}"
             echo
-            echo "The all-registry refresh completed for exact main SHA \`${main_sha}\`, which contains the reviewed merge."
+            echo "The crates.io refresh completed for exact main SHA \`${main_sha}\`, which contains the reviewed merge."
           } >> "${GITHUB_STEP_SUMMARY}"

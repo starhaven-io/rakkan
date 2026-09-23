@@ -93,13 +93,14 @@ body, and approval state untouched. The pull-request diff may be a nonempty
 subset of the expected files but must include the manifest; the full candidate
 tree is compared byte-for-byte, and any unexpected file fails closed. A post-merge listener
 rechecks its repository, base, branch, complete file set, and immutable merge
-SHA before dispatching the
-protected all-registry refresh. It verifies that merge remains an ancestor of
-current `main`, authorizes one exact current SHA, waits for the refresh result,
+SHA before dispatching the protected refresh for that registry. It verifies
+that merge remains an ancestor of current `main`, authorizes one exact current
+SHA, waits for the refresh result,
 and retries a dispatch cancelled or skipped outside the production queue. The
 shared production lock retains up to 100 pending deploys, refreshes, and
 rollbacks instead of silently replacing an earlier pending run. Each seed
-listener requests both registries, and a run waiting for protected-environment
+listener refreshes only its own registry, so a failure in one registry never
+withholds the other's publication, and a run waiting for protected-environment
 approval remains authoritative after the listener's bounded wait. A human merges
 every seed pull request; hosted rulesets, not repository text, decide whether an
 approval is required as well.
