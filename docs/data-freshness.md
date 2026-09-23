@@ -46,8 +46,9 @@ content changes fail closed.
 - A provenance refresh may persist its checked rows and remaining cursor, but
   it does not create a partial snapshot for either registry.
 - A failure before replacement leaves production D1 unchanged. Replacement is
-  preceded by a Time Travel bookmark and full SQL evidence export; a failure
-  during or after replacement requires remote readback and may require rollback.
+  preceded by a Time Travel bookmark, a full SQL evidence export, and a
+  read-back-verified R2 archive of the candidate; a failure during or after
+  replacement requires remote readback and may require rollback.
 
 ## Inspecting freshness
 

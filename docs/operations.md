@@ -31,7 +31,7 @@ Configure these GitHub environments and keep their credentials disjoint:
 | --- | --- | --- |
 | `starhaven` | `APP_CLIENT_ID`, `APP_PRIVATE_KEY` | Update a fixed seed automation branch and open a pull request |
 | `cloudflare-d1-read` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_READ_TOKEN` | Read only the production schema contract before site deploy |
-| `cloudflare-d1` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_TOKEN` | Export, replace, restore, and verify production D1 |
+| `cloudflare-d1` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_D1_TOKEN`, `R2_ARCHIVE_ACCESS_KEY_ID`, `R2_ARCHIVE_SECRET_ACCESS_KEY` | Export, archive, replace, restore, and verify production D1 |
 | `cloudflare-worker` | `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_WORKER_TOKEN` | Deploy the Worker without D1-write or zone-route authority |
 
 Restrict production environments to the `main` branch, excluding tags named
@@ -187,10 +187,27 @@ Workflow artifacts are retained for seven days, and Time Travel is bounded by
 the Cloudflare account's retention window. The raw SQL export is not directly
 replayable into a populated D1 database; retain it as evidence and for a tested
 empty-database recovery procedure. Local replay is advisory and must not
-replace the manifest checksum and post-restore remote readback. If a longer
-recovery window is required,
-copy the artifact to the organization's approved durable backup system without
-placing credentials or private incident data in the repository.
+replace the manifest checksum and post-restore remote readback.
+
+## Export archive
+
+Adoption snapshots are observations that cannot be rebuilt from the registries,
+so every candidate generation is archived before it can replace production.
+`Refresh Data` uploads the gzipped export and its checksum manifest to the
+`rakkan-d1-archive` R2 bucket under `generations/<generated_at>/`, reads both
+objects back, and stops before replacement unless they match byte for byte.
+
+The bucket is created out of band. Its access keys come from an R2 API token
+with Object Read and Write scoped to that bucket only, used through R2's
+S3-compatible endpoint. Add a bucket lock rule so objects cannot be deleted or
+overwritten, which keeps history intact even if the archive keys leak. A
+generation that never reached production is harmless: its export is still a
+consistent image.
+
+To recover beyond the Time Travel window, download both objects for the
+generation, decompress the SQL, and confirm it against the manifest with
+`scripts/verify_d1_export_manifest.rb` before using it. Its
+`adoption_snapshots` table holds the complete history up to that generation.
 
 ## Incident triage
 

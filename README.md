@@ -124,7 +124,8 @@ seed merge cannot rewrite an older dump-dated history point.
 Before production D1 is replaced, the workflow captures a D1 Time Travel
 bookmark and uploads it with a checksum-bound recovery manifest and full SQL
 export for evidence. It then requires the deployed Worker's health contract to
-accept the candidate schema, and
+accept the candidate schema, archives the candidate export to R2 so snapshot
+history outlives Time Travel, and after replacement
 requires remote schema and exact row counts to match the local export. Worker
 deployment, D1 replacement, and rollback share a serialization lock.
 Push-triggered refresh dry runs use a fresh local database and receive no
