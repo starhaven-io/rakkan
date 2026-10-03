@@ -6,9 +6,9 @@ among the most-downloaded packages, and trends over time. RubyGems.org is the
 first production registry; the schema and ingestion pipeline are
 registry-agnostic. crates.io has its tracked set committed in
 `seed/cratesio/`, reads provenance from the API, and is available in the web
-tier. A weekly workflow
-regenerates its tracked set on an automation branch; a bot-opened,
-human-reviewed seed PR must merge before the protected production refresh is dispatched.
+tier. For RubyGems and crates.io alike, a weekly workflow regenerates that
+registry's tracked set on an automation branch; a bot-opened, human-reviewed
+seed PR must merge before the protected production refresh is dispatched.
 PyPI is still provenance-only and needs both a tracked set and a durable
 discovery cursor.
 Prefer reading the Hanami v3.0 guides (hanakai.org) or installed gem source
@@ -37,8 +37,9 @@ over assuming framework APIs.
 ## Commands
 
 - `just check`: the common entry point. Engine and site coverage gates,
-  RuboCop, ShellCheck, Prettier, Astro type checking and production build,
-  zizmor with strict workflow collection, pinprick, npm install policy, and typos.
+  structural seed validation, RuboCop, ShellCheck, Prettier, Astro type
+  checking and production build, zizmor with strict workflow collection,
+  pinprick, npm install policy, and typos.
 - Specs require `HANAMI_ENV=test` and clean only this checkout's
   `db/rakkan_test.sqlite`; inherited database overrides cannot redirect cleanup.
 - `bin/setup && just dev`: fresh-clone path to the running site on real
