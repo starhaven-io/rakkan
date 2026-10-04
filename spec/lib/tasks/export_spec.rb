@@ -5,6 +5,7 @@ require "json"
 require "rake"
 require "sqlite3"
 require "tmpdir"
+require "stringio"
 
 RSpec.describe "export rake tasks", :db do
   before(:all) do
@@ -79,6 +80,46 @@ RSpec.describe "export rake tasks", :db do
       expect(File.exist?("#{metadata}.tmp")).to be(false)
     ensure
       restored&.close
+    end
+  end
+
+  it "bounds escaped multibyte SQL statements and preserves every value on import" do
+    registry = create_registry!
+    package = create_package!(registry, name: "large")
+    repository = "https://example.com/#{"é'" * 800}"
+    205.times do |index|
+      create_version!(package, number: "1.#{index}", source_repository: repository)
+    end
+    output = StringIO.new
+    db = Hanami.app["db.gateway"].connection
+    D1Export.write_inserts(output, db, "package_versions")
+    statements = output.string.lines
+    expect(statements.length).to be > 2
+    expect(statements.map(&:bytesize).max).to be <= 90_000
+    restored = SQLite3::Database.new(":memory:")
+    restored.execute(db[:sqlite_master].where(type: "table", name: "package_versions").get(:sql))
+    restored.execute_batch(output.string)
+    expect(restored.get_first_value("SELECT COUNT(*) FROM package_versions")).to eq(205)
+    expect(restored.execute("SELECT DISTINCT source_repository FROM package_versions")).to eq([[repository]])
+  ensure
+    restored&.close
+  end
+
+  it "fails clearly when a single row cannot fit, preserving the last published export" do
+    registry = create_registry!
+    package = create_package!(registry, name: "oversized")
+    create_version!(package, number: "1", source_repository: "é" * 50_000)
+    Dir.mktmpdir("rakkan-export-limit") do |dir|
+      FileUtils.mkdir_p(File.join(dir, "db"))
+      allow(Hanami.app).to receive(:root).and_return(Pathname(dir))
+      export = File.join(dir, "db/d1_export.sql")
+      metadata = File.join(dir, "db/d1_export.meta.json")
+      File.write(export, "previous SQL")
+      File.write(metadata, "previous metadata")
+      expect { Rake::Task["export:d1"].invoke }
+        .to raise_error(Sequel::DatabaseError, /package_versions row .* exceeds the D1 statement byte budget/)
+      expect(File.read(export)).to eq("previous SQL")
+      expect(File.read(metadata)).to eq("previous metadata")
     end
   end
 

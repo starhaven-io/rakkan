@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../d1_export"
+
 namespace :export do
   # The Workers site reads a D1 database; D1 is SQLite, so the export is the
   # app database's own DDL (from sqlite_master) plus batched INSERT
@@ -17,7 +19,6 @@ namespace :export do
     metadata_out = Hanami.app.root.join("db", "d1_export.meta.json")
     tmp = "#{out}.tmp"
     metadata_tmp = "#{metadata_out}.tmp"
-    batch_size = 200
     counts = {}
     generated_at = nil
     schema_contract = JSON.parse(
@@ -48,13 +49,7 @@ namespace :export do
                                   .select_map(:sql)
           ddl.each { |sql| f.puts "#{sql};" }
 
-          columns = db[table.to_sym].columns
-          db[table.to_sym].order(:id).each_slice(batch_size) do |rows|
-            values = rows.map do |row|
-              "(#{columns.map { |c| db.literal(row[c]) }.join(",")})"
-            end
-            f.puts "INSERT INTO #{table} (#{columns.join(",")}) VALUES #{values.join(",")};"
-          end
+          D1Export.write_inserts(f, db, table)
           counts[table] = db[table.to_sym].count
         end
 
