@@ -28,7 +28,7 @@ module Ingestion
 
       def call(from: nil, to: Time.now.utc, adapter: rubygems)
         registry = registry_repo.by_name(adapter.registry_slug)
-        return { error: "unknown registry #{adapter.registry_slug}" } unless registry
+        raise ArgumentError, "registry #{adapter.registry_slug} is not seeded; run ingest:seed first" unless registry
 
         now = Time.now.utc
         from = whole_second(from || default_from(registry))
