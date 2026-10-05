@@ -94,8 +94,19 @@ jobs:
 
             timeout 150m gh run watch "${refresh_run_id}" --repo "${REPOSITORY}" \
               --interval 15 --exit-status || true
-            details="$(gh run view "${refresh_run_id}" --repo "${REPOSITORY}" --json status,conclusion,jobs)"
-            status="$(jq -r '.status // "unknown"' <<< "${details}")"
+            # A completed run can still list its finished jobs as in progress for a short while.
+            for _settle in {1..12}; do
+              details="$(gh run view "${refresh_run_id}" --repo "${REPOSITORY}" --json status,conclusion,jobs)"
+              status="$(jq -r '.status // "unknown"' <<< "${details}")"
+              conclusion="$(jq -r '
+                [.jobs[] | select(.name == "Refresh registry data")][0] as $job |
+                if $job == null then .conclusion
+                elif $job.status == "completed" then $job.conclusion
+                else null end // ""
+              ' <<< "${details}")"
+              [[ "${status}" != "completed" || -n "${conclusion}" ]] && break
+              sleep 10
+            done
             if [[ "${status}" != "completed" ]]; then
               {
                 echo "## Registry refresh dispatched"
@@ -108,10 +119,10 @@ jobs:
               } >> "${GITHUB_STEP_SUMMARY}"
               exit 0
             fi
-            conclusion="$(jq -r '
-              [.jobs[] | select(.name == "Refresh registry data") | .conclusion][0] //
-              .conclusion // "unknown"
-            ' <<< "${details}")"
+            if [[ -z "${conclusion}" ]]; then
+              echo "::error::could not resolve the refresh result of completed run ${refresh_run_id}"
+              exit 1
+            fi
             if [[ "${conclusion}" == "success" ]]; then
               break
             fi
