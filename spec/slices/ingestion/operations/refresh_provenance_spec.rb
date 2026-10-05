@@ -370,8 +370,7 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
   end
 
   it "fails cleanly for an unknown registry" do
-    result = operation.call(adapter: FakeProvenanceAdapter.new(slug: "krates"))
-
-    expect(result.value!).to include(error: "unknown registry krates")
+    expect { operation.call(adapter: FakeProvenanceAdapter.new(slug: "krates")) }
+      .to raise_error(ArgumentError, /registry krates is not seeded/)
   end
 end

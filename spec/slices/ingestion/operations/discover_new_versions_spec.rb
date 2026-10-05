@@ -29,6 +29,12 @@ RSpec.describe Ingestion::Operations::DiscoverNewVersions, :db do
       prerelease: false, yanked: }
   end
 
+  it "rejects an unseeded registry before requesting its feed" do
+    adapter = FakeFeedAdapter.new(slug: "rubygems")
+    expect { operation.call(adapter:) }.to raise_error(ArgumentError, /registry rubygems is not seeded/)
+    expect(adapter.calls).to be_empty
+  end
+
   it "inserts tracked versions only, propagates yanked, and persists the cursor" do
     registry = create_registry!
     create_package!(registry, name: "psych")

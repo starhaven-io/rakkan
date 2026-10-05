@@ -30,7 +30,7 @@ module Ingestion
       def call(limit: 50, stale_after: nil, adapter: rubygems,
                waiver_date: Time.now.utc.to_date, waivers: nil)
         registry = registry_repo.by_name(adapter.registry_slug)
-        return { error: "unknown registry #{adapter.registry_slug}" } unless registry
+        raise ArgumentError, "registry #{adapter.registry_slug} is not seeded; run ingest:seed first" unless registry
 
         waivers ||= Ingestion::ProvenanceWaivers.load(today: waiver_date)
         now = Time.now.utc

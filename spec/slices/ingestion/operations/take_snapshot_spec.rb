@@ -78,9 +78,7 @@ RSpec.describe Ingestion::Operations::TakeSnapshot, :db do
   end
 
   it "fails cleanly for an unknown registry" do
-    result = operation.call(registry_name: "krates")
-
-    expect(result).to be_success
-    expect(result.value!).to include(error: "unknown registry krates")
+    expect { operation.call(registry_name: "krates") }
+      .to raise_error(ArgumentError, /registry krates is not seeded/)
   end
 end

@@ -18,7 +18,7 @@ module Ingestion
       def call(registry_name: "rubygems", taken_on: Time.now.utc.to_date,
                waiver_date: taken_on, waivers: nil)
         registry = registry_repo.by_name(registry_name)
-        return { error: "unknown registry #{registry_name}" } unless registry
+        raise ArgumentError, "registry #{registry_name} is not seeded; run ingest:seed first" unless registry
 
         tracked = packages.tracked.where(registry_id: registry.id)
         waivers ||= Ingestion::ProvenanceWaivers.load(today: waiver_date)
