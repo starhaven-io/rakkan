@@ -106,13 +106,13 @@ test('attacker-controlled query variants share one rendered cache entry', async 
   );
 });
 
-test('encoded paths that Astro resolves identically share one cache entry', async () => {
+test('distinct router path spellings never alias a cache entry', async () => {
   const generation = '2026-08-22 17:28:00';
-  const paths = ['/packages/rake', '/packages/r%61ke', '/packages/r%2561ke'];
+  const paths = ['/packages/rake', '/packages/r%61ke', '/packages/r%2561ke', '//packages/rake'];
   const keys = paths.map((path) => versionedCacheKey(`https://rakkan.dev${path}`, generation));
 
-  assert.equal(new Set(keys).size, 1);
-  for (const path of paths) assert.equal(isCacheableRequest('GET', `https://rakkan.dev${path}`), true);
+  assert.equal(new Set(keys).size, paths.length);
+  assert.equal(isCacheableRequest('GET', 'https://rakkan.dev//packages/rake'), false);
 });
 
 test('a route-provided cache policy opts out of the shared cache', async () => {
@@ -261,4 +261,22 @@ test('GET requests for rendered data pages use the shared cache regardless of ig
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/search'), false);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/search?q=rake'), false);
   assert.equal(isCacheableRequest('GET', 'https://rakkan.dev/cratesio/packages/serde/versions'), false);
+});
+
+test('an encoded path cannot populate the plain path response', async () => {
+  const cache = new MemoryCache();
+  const generation = confirmedGeneration('2026-10-04 00:00:00');
+  await serveVersionedPage(
+    cache,
+    'https://rakkan.dev/packages/r%2561ke',
+    generation,
+    async () => new Response('encoded route'),
+  );
+  const plain = await serveVersionedPage(
+    cache,
+    'https://rakkan.dev/packages/rake',
+    generation,
+    async () => new Response('plain route'),
+  );
+  assert.equal(await plain.text(), 'plain route');
 });

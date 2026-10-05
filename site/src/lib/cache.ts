@@ -9,23 +9,6 @@ export const BROWSER_CACHE_CONTROL = 'no-store';
 const CACHEABLE_PATH = /^\/$|^\/packages(\/[^/]+)?$|^\/cratesio(\/packages(\/[^/]+)?)?$|^\/sitemap\.xml$/;
 const PAGINATED_PATH = /^\/packages(\/[^/]+)?$|^\/cratesio\/packages(\/[^/]+)?$/;
 
-function normalizedUrl(requestUrl: string | URL): URL {
-  const url = new URL(requestUrl);
-  let pathname = url.pathname;
-  for (let iteration = 0; iteration < 10; iteration += 1) {
-    let decoded: string;
-    try {
-      decoded = decodeURI(pathname);
-    } catch {
-      break;
-    }
-    if (decoded === pathname) break;
-    pathname = decoded;
-  }
-  url.pathname = pathname.replace(/\/{2,}/g, '/');
-  return url;
-}
-
 export interface EdgeCache {
   match(key: string): Promise<Response | undefined>;
   put(key: string, response: Response): Promise<void>;
@@ -69,12 +52,12 @@ export class GenerationTracker {
 }
 
 export function isCacheableRequest(method: string, requestUrl: string | URL): boolean {
-  const url = normalizedUrl(requestUrl);
+  const url = new URL(requestUrl);
   return method === 'GET' && CACHEABLE_PATH.test(url.pathname);
 }
 
 export function versionedCacheKey(requestUrl: string | URL, generatedAt: string): string {
-  const url = normalizedUrl(requestUrl);
+  const url = new URL(requestUrl);
   const page = PAGINATED_PATH.test(url.pathname) ? parsePage(url.searchParams.get('page')) : 1;
   url.search = '';
   if (page > 1) url.searchParams.set('page', page.toString());
