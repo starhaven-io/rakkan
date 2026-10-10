@@ -157,7 +157,7 @@ It enforces structural and semantic seed validity without making unrelated CI
 expire as the wall clock advances. Protected refreshes and seed updaters retain
 the freshness gates. The command also enforces engine line/branch and
 TypeScript line/branch/function/statement
-coverage thresholds, Ruby and site tests, RuboCop, ShellCheck, Prettier, Astro
+coverage thresholds, Ruby and site tests, RuboCop, Prettier, Astro
 type checking and production build, npm install-script policy, strict Zizmor workflow collection,
 pinprick, and spelling. The test suites make no network calls: fixtures
 under `spec/fixtures/` are distilled from dump-derived seeds and recorded

@@ -1,41 +1,38 @@
-#!/usr/bin/env bash
-set -euo pipefail
-IFS=$'\n\t'
+#!/usr/bin/env ruby
+# frozen_string_literal: true
 
-# Idempotent fresh-clone setup: the engine (Ruby, SQLite), its seed data,
-# and the site (Astro on a local D1). Safe to re-run at any time.
+require "fileutils"
 
-announce() {
-  local bold='\033[1m'
-  local reset='\033[0m'
-  printf "${bold}%s${reset}\n" "$1"
-}
+def announce(message)
+  puts "\e[1m#{message}\e[0m"
+end
 
-cd "$(dirname "$0")/.."
+Dir.chdir(File.expand_path("..", __dir__))
 
 announce "Installing engine dependencies..."
-bundle check || bundle install
+system("bundle", "install", exception: true) unless system("bundle", "check")
 
-if [ ! -f .env ]; then
+unless File.file?(".env")
   announce "Creating .env from .env.example..."
-  cp .env.example .env
-fi
+  FileUtils.cp(".env.example", ".env")
+end
 
+engine_env = { "HANAMI_LOG_LEVEL" => "info" }
 announce "Preparing the databases..."
-HANAMI_LOG_LEVEL=info bundle exec hanami db prepare
+system(engine_env, "bundle", "exec", "hanami", "db", "prepare", exception: true)
 
 announce "Loading the tracked sets from seed data (no network)..."
-HANAMI_LOG_LEVEL=info bundle exec rake ingest:seed
-HANAMI_LOG_LEVEL=info bundle exec rake "ingest:seed[cratesio]"
-HANAMI_LOG_LEVEL=info bundle exec rake snapshot:take
+%w[ingest:seed ingest:seed[cratesio] snapshot:take].each do |task|
+  system(engine_env, "bundle", "exec", "rake", task, exception: true)
+end
 
 announce "Installing site dependencies..."
-node scripts/check-npm-install-policy.mjs site
-(cd site && npm ci --strict-allow-scripts)
+system("node", "scripts/check-npm-install-policy.mjs", "site", exception: true)
+system("npm", "ci", "--strict-allow-scripts", chdir: "site", exception: true)
 
 announce "Exporting to the site's local D1..."
-HANAMI_LOG_LEVEL=info bundle exec rake export:d1
-(cd site && WRANGLER_WRITE_LOGS=false ./node_modules/.bin/wrangler d1 execute \
-  rakkan --local --file=../db/d1_export.sql > /dev/null)
+system(engine_env, "bundle", "exec", "rake", "export:d1", exception: true)
+system({ "WRANGLER_WRITE_LOGS" => "false" }, "./node_modules/.bin/wrangler", "d1", "execute",
+       "rakkan", "--local", "--file=../db/d1_export.sql", chdir: "site", out: File::NULL, exception: true)
 
 announce "🌸 Setup complete. Start the site with: just dev"

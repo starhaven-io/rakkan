@@ -185,7 +185,7 @@ RSpec.describe "privileged workflow security contracts" do
       updater = workflow(name)
       expect(updater).to include(
         "pull-requests: read",
-        "scripts/seed-proposal-needed.sh",
+        "scripts/seed-proposal-needed.rb",
         "update_required: ${{ steps.proposal.outputs.update_required }}",
         "if: steps.proposal.outputs.update_required == 'true'"
       )
