@@ -5,18 +5,21 @@ require "json"
 require "open3"
 require "tmpdir"
 
-RSpec.describe "seed-proposal-needed.sh" do
-  let(:script) { Hanami.app.root.join("scripts", "seed-proposal-needed.sh").to_s }
+RSpec.describe "seed-proposal-needed.rb" do
+  let(:script) { Hanami.app.root.join("scripts", "seed-proposal-needed.rb").to_s }
 
   def blob_sha(content)
     Digest::SHA1.hexdigest("blob #{content.bytesize}\0#{content}")
   end
 
-  def run_check(pulls:, files: [], content: "candidate\n", remote_content: content)
+  def run_check(pulls:, files: [], content: "candidate\n", remote_content: content, tree_overrides: {})
     Dir.mktmpdir("rakkan-seed-proposal") do |directory|
       candidate = File.join(directory, "candidate")
       bin = File.join(directory, "bin")
       FileUtils.mkdir_p([candidate, bin])
+      git = ENV.fetch("PATH").split(File::PATH_SEPARATOR).map { |path| File.join(path, "git") }
+               .find { |path| File.file?(path) && File.executable?(path) }
+      File.symlink(File.realpath(git), File.join(bin, "git"))
       File.write(File.join(candidate, "manifest.json"), content)
       File.write(File.join(candidate, "top_1000.tsv"), "top\n")
       File.write(File.join(bin, "gh"), fake_gh)
@@ -35,19 +38,20 @@ RSpec.describe "seed-proposal-needed.sh" do
             "sha" => blob_sha("top\n")
           }
         ]
-      }
+      }.merge(tree_overrides)
       env = {
         "FILES_JSON" => JSON.generate([files]),
         "GITHUB_REPOSITORY" => "starhaven-io/rakkan",
-        "PATH" => "#{bin}:#{ENV.fetch("PATH")}",
+        "PATH" => "#{bin}:/usr/bin:/bin",
+        "TMPDIR" => directory,
         "PRS_JSON" => JSON.generate([pulls]),
         "TREE_JSON" => JSON.generate(tree)
       }
-      yield Open3.capture3(
-        env, "bash", script, "rubygems", candidate, "automation/rubygems-seed",
-        "manifest.json", "top_1000.tsv",
-        chdir: Hanami.app.root.to_s
+      result = Open3.capture3(
+        env, RbConfig.ruby, script, "rubygems", candidate, "automation/rubygems-seed",
+        "manifest.json", "top_1000.tsv", chdir: directory, unsetenv_others: true
       )
+      yield result
     end
   end
 
@@ -72,6 +76,14 @@ RSpec.describe "seed-proposal-needed.sh" do
       expect(status).to be_success
       expect(stdout).to eq("false\n")
       expect(stderr).to be_empty
+    end
+  end
+
+  it "compares UTF-8 candidate bytes and parses UTF-8 API metadata without a locale" do
+    pull = open_pull.merge("title" => "🌸 Seed update")
+    run_check(pulls: [pull], files: expected_files, content: "café\n") do |stdout, stderr, status|
+      expect(status).to be_success, stderr
+      expect(stdout).to eq("false\n")
     end
   end
 
@@ -120,9 +132,40 @@ RSpec.describe "seed-proposal-needed.sh" do
     end
   end
 
+  it "rejects ambiguous proposals and invalid immutable head identities" do
+    [
+      [open_pull, open_pull(number: 43)],
+      [open_pull(number: "42")],
+      [open_pull.merge("head" => open_pull.fetch("head").merge("sha" => "main"))]
+    ].each do |pulls|
+      run_check(pulls:, files: expected_files) do |stdout, _stderr, status|
+        expect(status).not_to be_success
+        expect(stdout).to be_empty
+      end
+    end
+  end
+
+  it "rejects duplicate and non-modified files in the proposal" do
+    [expected_files * 2, expected_files.map { |file| file.merge("status" => "added") }].each do |files|
+      run_check(pulls: [open_pull], files:) do |_stdout, stderr, status|
+        expect(status).not_to be_success
+        expect(stderr).to include("unexpected file set")
+      end
+    end
+  end
+
+  it "fails closed when GitHub omits blobs or truncates the tree" do
+    [{ "truncated" => true }, { "tree" => [] }].each do |tree_overrides|
+      run_check(pulls: [open_pull], files: expected_files, tree_overrides:) do |stdout, _stderr, status|
+        expect(status).not_to be_success
+        expect(stdout).to be_empty
+      end
+    end
+  end
+
   def fake_gh
     <<~'BASH'
-      #!/usr/bin/env bash
+      #!/bin/bash
       set -euo pipefail
       if [[ "$*" == *"/pulls/"*"/files"* ]]; then
         printf '%s\n' "${FILES_JSON}"

@@ -227,7 +227,7 @@ jobs:
           done
 
       - name: Ingest registry changes
-        run: timeout --signal=TERM --kill-after=30s 70m bash scripts/refresh-registry-data.sh
+        run: timeout --signal=TERM --kill-after=30s 70m ruby scripts/refresh-registry-data.rb
 
       - name: Export refreshed D1 database
         run: |
@@ -440,9 +440,9 @@ jobs:
       - name: Exercise ingestion and export without production credentials
         run: |
           REGISTRY=rubygems REFRESH_LIMIT=250 timeout --signal=TERM --kill-after=30s 15m \
-            bash scripts/refresh-registry-data.sh
+            ruby scripts/refresh-registry-data.rb
           REGISTRY=cratesio REFRESH_LIMIT=5 timeout --signal=TERM --kill-after=30s 15m \
-            bash scripts/refresh-registry-data.sh
+            ruby scripts/refresh-registry-data.rb
           bundle exec rake export:d1
           bundle exec ruby scripts/verify_d1_export_manifest.rb \
             db/d1_export.meta.json db/d1_export.sql >/dev/null

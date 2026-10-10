@@ -135,7 +135,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          update_required="$(bash scripts/seed-proposal-needed.sh \
+          update_required="$(ruby scripts/seed-proposal-needed.rb \
             rubygems "${GENERATED_SEED}" automation/rubygems-seed \
             manifest.json top_1000.tsv tracked_versions.tsv.gz tracked_attestations.tsv.gz)"
           echo "update_required=${update_required}" >> "${GITHUB_OUTPUT}"

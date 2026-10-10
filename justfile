@@ -62,7 +62,7 @@ check-seeds:
 
 # Check external executables required by the complete local gate
 check-tools:
-    bash scripts/check-tools.sh
+    ruby scripts/check-tools.rb
 
 # Run all test suites and write the Codecov coverage reports
 test-cov:
@@ -91,56 +91,7 @@ site-check:
 
 # Run all checks
 check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    failed=0
-    skipped=()
-    run() {
-        echo "--- $1 ---"
-        shift
-        if ! "$@"; then
-            failed=1
-        fi
-    }
-    skip() {
-        echo "--- $1 --- skipped ($2 not found)"
-        skipped+=("$2 (brew install $3)")
-    }
-    run_tool() {
-        local name="$1" tool="$2" package="$3"
-        shift 3
-        if command -v "$tool" >/dev/null 2>&1; then
-            run "$name" "$@"
-        else
-            skip "$name" "$tool" "$package"
-        fi
-    }
-    run tools just check-tools
-    run npm-policy node scripts/check-npm-install-policy.mjs site
-    run seeds just check-seeds
-    run rspec env COVERAGE=true bundle exec rspec
-    run rubocop bundle exec rubocop --cache-root var/cache/rubocop
-    run_tool shellcheck shellcheck shellcheck shellcheck bin/setup scripts/*.sh
-    run_tool zizmor zizmor zizmor zizmor --strict-collection --persona auditor .github/workflows/
-    run_tool pinprick pinprick pinprick pinprick audit .
-    if [ -d site/node_modules ]; then
-        run site-format bash -c 'cd site && npm run --silent format:check'
-        run site-check bash -c 'cd site && npm run --silent check'
-        run site-tests bash -c 'cd site && npm run --silent test:coverage'
-        run site-build bash -c 'cd site && ./node_modules/.bin/astro build --silent > /dev/null'
-    else
-        skip site-tests node_modules "just install-site"
-    fi
-    run_tool typos typos typos-cli typos
-    if [ ${#skipped[@]} -gt 0 ]; then
-        echo ""
-        echo "Checks skipped due to missing tools:"
-        for tool in "${skipped[@]}"; do
-            echo "  - $tool"
-        done
-        failed=1
-    fi
-    exit $failed
+    ruby scripts/check.rb
 
 # Check documentation links
 lychee:

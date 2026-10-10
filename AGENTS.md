@@ -37,7 +37,7 @@ over assuming framework APIs.
 ## Commands
 
 - `just check`: the common entry point. Engine and site coverage gates,
-  structural seed validation, RuboCop, ShellCheck, Prettier, Astro type
+  structural seed validation, RuboCop, Prettier, Astro type
   checking and production build, zizmor with strict workflow collection,
   pinprick, npm install policy, and typos.
 - Specs require `HANAMI_ENV=test` and clean only this checkout's

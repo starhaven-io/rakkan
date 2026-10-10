@@ -6,11 +6,11 @@ documentation are all reviewed as production changes.
 ## Set up
 
 Use Ruby and Node versions compatible with `.ruby-version` and
-`site/package.json`. The complete local gate also requires `just`, ShellCheck,
+`site/package.json`. The complete local gate also requires `just`,
 zizmor, pinprick, and typos-cli. On macOS with Homebrew:
 
 ```sh
-brew install just shellcheck zizmor pinprick typos-cli
+brew install just zizmor pinprick typos-cli
 ```
 
 Confirm the audit tools, then set up the project:
@@ -37,7 +37,7 @@ tests that call a registry or other live service.
   describe.
 - Run `just check` before opening a pull request. It covers the engine and site
   suites with coverage thresholds, formatting, type checking, builds, workflow
-  analysis, shell analysis, dependency policy, and spelling.
+  analysis, dependency policy, and spelling.
 
 When changing a tracked seed, use the registry builder and semantic checker.
 Never hand-edit a compressed seed. The normal path is a bot-opened seed pull
