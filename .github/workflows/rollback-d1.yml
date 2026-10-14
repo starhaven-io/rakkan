@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@e81a8fa391b11a595c1b7ed84177cc0fe02faf83 # v1.328.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
 
       - name: Validate source refresh run
         env:
@@ -62,7 +62,7 @@ jobs:
           ' <<< "${source_run}" >/dev/null
 
       - name: Download pre-refresh recovery artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: rakkan-d1-backup-${{ inputs.refresh_run_id }}
           path: ${{ runner.temp }}/backup
