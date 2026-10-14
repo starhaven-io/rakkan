@@ -93,7 +93,6 @@ RSpec.describe "privileged workflow security contracts" do
       ".path == \".github/workflows/refresh-data.yml\"",
       '.conclusion == "cancelled"',
       '.conclusion == "timed_out"',
-      "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
       "wrangler d1 time-travel restore rakkan",
       "https://rakkan.dev/health/compatibility/v1.json",
       "index($expected_schema) != null",
@@ -108,6 +107,21 @@ RSpec.describe "privileged workflow security contracts" do
       'sqlite3 "${EXPECTED_DB}" < "${sql_file}"',
       "https://rakkan.dev/health/v1.json",
       %q(column_names}" == '["generated_at"]')
+    )
+  end
+
+  it "downloads rollback recovery from the selected source run with an immutable action" do
+    rollback = YAML.safe_load(workflow("rollback-d1.yml"))
+    steps = rollback.fetch("jobs").fetch("rollback").fetch("steps")
+    download = steps.find { |step| step["name"] == "Download pre-refresh recovery artifact" }
+
+    expect(download.fetch("uses")).to match(%r{\Aactions/download-artifact@[0-9a-f]{40}\z})
+    expect(download.fetch("with")).to include(
+      "name" => "rakkan-d1-backup-${{ inputs.refresh_run_id }}",
+      "path" => "${{ runner.temp }}/backup",
+      "github-token" => "${{ github.token }}",
+      "repository" => "${{ github.repository }}",
+      "run-id" => "${{ inputs.refresh_run_id }}"
     )
   end
 
