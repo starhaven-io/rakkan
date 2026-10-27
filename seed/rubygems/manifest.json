@@ -1,9 +1,9 @@
 {
   "source": "rubygems.org weekly public PostgreSQL dump",
-  "source_url": "https://rubygems-dumps.s3.us-west-2.amazonaws.com/production/public_postgresql/2026.10.19.21.21.38/public_postgresql.tar",
-  "dump_key": "production/public_postgresql/2026.10.19.21.21.38/public_postgresql.tar",
-  "dump_taken_at": "2026-10-19T21:21:38Z",
-  "archive_sha256": "da447b5762ae49af2aa96bca4afac28753d95a89d5e53b3661eb81b98de8eda6",
+  "source_url": "https://rubygems-dumps.s3.us-west-2.amazonaws.com/production/public_postgresql/2026.10.26.21.21.32/public_postgresql.tar",
+  "dump_key": "production/public_postgresql/2026.10.26.21.21.32/public_postgresql.tar",
+  "dump_taken_at": "2026-10-26T21:21:32Z",
+  "archive_sha256": "04f8adb361375fb99d328eeb4938a49ea566a521e28488827edbd25981a6d916",
   "built_by": "research/build_seed.rb",
   "tracked_set": "top 1000 gems by total downloads (gem_downloads version_id=0 rows)"
 }
