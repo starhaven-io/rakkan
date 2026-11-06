@@ -249,4 +249,29 @@ RSpec.describe "privileged workflow security contracts" do
     expect(refresh.index("id: replace")).to be < refresh.index("Verify replacement")
     expect(refresh).not_to include("--file=../db/d1_export.sql --yes > /dev/null")
   end
+
+  it "resolves the open seed proposal by head repository, not branch name alone" do
+    %w[update-cratesio-seed.yml update-rubygems-seed.yml].each do |name|
+      updater = workflow(name)
+
+      expect(updater).to include(
+        '-f "head=${REPOSITORY%%/*}:${AUTOMATION_BRANCH}"',
+        '.head.repo.full_name == $repository and .head.ref == $branch and .base.ref == "main"',
+        "expected at most one open seed proposal"
+      )
+      expect(updater).not_to include("gh pr list --repo")
+    end
+  end
+
+  it "stops the seed proposal lookup when the proposal count cannot be read" do
+    %w[update-cratesio-seed.yml update-rubygems-seed.yml].each do |name|
+      updater = workflow(name)
+
+      expect(updater).to include(
+        %q(proposal_count="$(jq 'length' <<< "${proposals}")"),
+        "if (( proposal_count > 1 )); then"
+      )
+      expect(updater).not_to include(%q($(jq 'length' <<< "${proposals}") > 1))
+    end
+  end
 end
