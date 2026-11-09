@@ -1,8 +1,8 @@
 {
   "source": "crates.io daily database dump",
   "source_url": "https://static.crates.io/db-dump.tar.gz",
-  "archive_sha256": "ab2cd11282b553340aa03335c6a970ae39a4ab4e5b83c577ef75c763a111f760",
-  "dump_taken_at": "2026-11-02T02:00:15.749451427Z",
+  "archive_sha256": "8789061edc2ddc0a42820e49d8efd7268f28361eedec95cc7f283156df65fd68",
+  "dump_taken_at": "2026-11-09T02:00:13.634835653Z",
   "source_commit": "55d3c7bf0d5d0ffc2fc6217d7ce0f97cc798ae02",
   "built_by": "research/build_cratesio_seed.rb",
   "tracked_set": "top 1000 crates by total downloads (crate_downloads.csv)",
