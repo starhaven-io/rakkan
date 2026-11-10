@@ -151,12 +151,15 @@ module Ingestion
 
       def recompute_first_provenant_at(registry_id)
         # One statement instead of N queries; plain SQL via the Sequel db
-        # handle because ROM's DSL has no correlated-subquery update.
+        # handle because ROM's DSL has no correlated-subquery update. A yanked
+        # version never counts toward adoption, even though its row keeps the
+        # provenance observed before the yank.
         packages.dataset.db.run(<<~SQL)
           UPDATE packages
           SET first_provenant_at = (
             SELECT MIN(pv.published_at) FROM package_versions pv
             WHERE pv.package_id = packages.id AND pv.provenance_kind IS NOT NULL
+              AND pv.yanked = 0
           )
           WHERE registry_id = #{Integer(registry_id)}
         SQL
