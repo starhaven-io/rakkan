@@ -110,13 +110,14 @@ validates the committed seed is no more than nine days old, performs resumable
 ingestion within a bounded wall-clock budget, and snapshots only a complete
 observation. RubyGems discovery must drain. An incomplete crates.io backfill
 or RubyGems provenance refresh persists progress but withholds its snapshot.
-Yanked versions require no provenance lookup. A persistent exact per-version
-404 can be handled only by an expiring, source-controlled waiver; it is neither
-stamped nor counted as a negative provenance observation. At most 100 reviewed
-waivers are allowed, and their exact versions are probed separately so they
-cannot consume or starve the ordinary refresh limit. An expired entry is
-reported and becomes inactive, so its exact version returns to the ordinary
-fail-closed error path without stopping unrelated registries.
+Yanked versions require no provenance lookup and never count toward adoption.
+A persistent exact per-version 404 can be handled only by an expiring,
+source-controlled waiver; it is neither stamped nor counted as a negative
+provenance observation. At most 100 reviewed waivers are allowed, and their
+exact versions are probed separately so they cannot consume or starve the
+ordinary refresh limit. An expired entry is reported and becomes inactive, so
+its exact version returns to the ordinary fail-closed error path without
+stopping unrelated registries.
 The refresh wrapper freezes one UTC run date for waiver evaluation and the
 resulting snapshot, even if its subprocesses cross midnight. Snapshot dates
 therefore describe the day on which the complete refresh began, and a delayed

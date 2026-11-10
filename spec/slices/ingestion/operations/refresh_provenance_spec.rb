@@ -271,6 +271,35 @@ RSpec.describe Ingestion::Operations::RefreshProvenance, :db do
     expect(versions.by_pk(yanked).one[:provenance_checked_at]).to be_nil
   end
 
+  it "does not derive first_provenant_at from a yanked release" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych")
+    yanked = create_version!(pkg, number: "5.1.0", published_at: Time.utc(2026, 5, 1),
+                                  provenance:, provenance_checked_at: Time.utc(2026, 5, 2), yanked: true)
+    create_version!(pkg, number: "5.0.0", published_at: Time.utc(2026, 4, 1))
+
+    operation.call(adapter: FakeProvenanceAdapter.new)
+
+    expect(versions.by_pk(yanked).one[:provenance_kind]).to eq("sigstore_attestation")
+    expect(Hanami.app["repos.package_repo"].find(registry.id, "psych").first_provenant_at).to be_nil
+  end
+
+  it "clears first_provenant_at when the only provenant release is yanked later" do
+    registry = create_registry!
+    pkg = create_package!(registry, name: "psych", first_provenant_at: Time.utc(2026, 5, 1))
+    attested = create_version!(pkg, number: "5.1.0", published_at: Time.utc(2026, 5, 1),
+                                    provenance:, provenance_checked_at: Time.utc(2026, 5, 2))
+    versions.by_pk(attested).command(:update).call(yanked: true)
+    adapter = FakeProvenanceAdapter.new
+
+    result = operation.call(adapter:)
+
+    expect(result.value!).to eq(checked: 0, provenant: 0, settled: 0, waived: 0, errors: 0, remaining: 0)
+    expect(adapter.requested).to be_empty
+    expect(versions.by_pk(attested).one[:provenance_kind]).to eq("sigstore_attestation")
+    expect(Hanami.app["repos.package_repo"].find(registry.id, "psych").first_provenant_at).to be_nil
+  end
+
   it "temporarily waives only an exact persistent 404 without recording a negative observation" do
     registry = create_registry!
     pkg = create_package!(registry, name: "psych")

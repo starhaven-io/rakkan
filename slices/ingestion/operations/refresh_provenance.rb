@@ -168,12 +168,15 @@ module Ingestion
         end
       end
 
+      # A yanked version never counts toward adoption, even though its row
+      # keeps the provenance observed before the yank.
       def recompute_first_provenant_at(registry_id)
         package_versions.dataset.db.run(<<~SQL)
           UPDATE packages
           SET first_provenant_at = (
             SELECT MIN(pv.published_at) FROM package_versions pv
             WHERE pv.package_id = packages.id AND pv.provenance_kind IS NOT NULL
+              AND pv.yanked = 0
           )
           WHERE registry_id = #{Integer(registry_id)}
         SQL

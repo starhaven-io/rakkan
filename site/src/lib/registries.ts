@@ -35,7 +35,7 @@ const sites: Record<RegistrySlug, RegistrySite> = {
     packagePath: (name) => `/cratesio/packages/${encodeURIComponent(name)}`,
     packageUrl: (name) => `https://crates.io/crates/${encodeURIComponent(name)}`,
     adoptionDescription: (noun) =>
-      `A ${noun} counts as adopted when at least one tracked release reports trusted-publisher metadata from crates.io.`,
+      `A ${noun} counts as adopted when at least one tracked, non-yanked release reports trusted-publisher metadata from crates.io.`,
     historyDescription: 'One completed refresh observation per UTC day.',
     releaseDescription: 'Trusted-publisher metadata per recorded version.',
   },
