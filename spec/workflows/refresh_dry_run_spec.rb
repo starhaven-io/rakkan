@@ -18,7 +18,7 @@ RSpec.describe "Refresh Data push dry run" do
       expect(result.fetch(:status)).to be_success, result.fetch(:stderr)
       calls = result.fetch(:calls)
       expect(calls.grep(/ingest:refresh\[/)).to eq(
-        ["exec rake ingest:refresh[250,rubygems,2026-09-22]"] +
+        ["exec rake ingest:refresh[500,rubygems,2026-09-22]"] +
         (["exec rake ingest:refresh[5,cratesio,2026-09-22]"] * 3)
       )
       expect(calls).to include("exec rake snapshot:take[rubygems,2026-09-22]")

@@ -439,7 +439,7 @@ jobs:
       # backfill, so a few lookups exercise that path without re-crawling it.
       - name: Exercise ingestion and export without production credentials
         run: |
-          REGISTRY=rubygems REFRESH_LIMIT=250 timeout --signal=TERM --kill-after=30s 15m \
+          REGISTRY=rubygems REFRESH_LIMIT=500 timeout --signal=TERM --kill-after=30s 15m \
             ruby scripts/refresh-registry-data.rb
           REGISTRY=cratesio REFRESH_LIMIT=5 timeout --signal=TERM --kill-after=30s 15m \
             ruby scripts/refresh-registry-data.rb
