@@ -145,19 +145,7 @@ module Ingestion
       # The workflow consumes this count from the operation result instead of
       # maintaining a second copy of the eligibility rules in shell SQL.
       def candidate_scope(registry_id, stale_after, available_since, now)
-        ds = package_versions.dataset
-                             .join(:packages, id: :package_id)
-                             .where(Sequel[:packages][:registry_id] => registry_id)
-                             .where(Sequel[:packages][:tracked] => true)
-                             .where(Sequel[:package_versions][:yanked] => false)
-        if available_since
-          ds = ds.where(
-            Sequel.|(
-              Sequel[:package_versions][:published_at] >= available_since,
-              { Sequel[:package_versions][:published_at] => nil }
-            )
-          )
-        end
+        ds = package_versions.tracked_release_dataset(registry_id, available_since:)
         if stale_after
           ds.where do
             (Sequel[:package_versions][:provenance_checked_at] =~ nil) |
