@@ -42,8 +42,11 @@ content changes fail closed.
   converted into negative provenance observations.
 - RubyGems discovery and provenance refresh each get at most three resumable
   attempts. The protected ingestion step has a 70-minute wall-clock limit.
-- A provenance refresh may persist its checked rows and remaining cursor, but
-  it does not create a partial snapshot for either registry.
+- The snapshot writer checks for unresolved tracked, non-yanked releases before
+  recording an observation, including when invoked directly through `snapshot:take`.
+  Active exact waivers and releases known to predate the registry's provenance
+  mechanism keep their existing treatment. An incomplete refresh can persist its
+  progress while preserving the last complete observation.
 - A failure before replacement leaves production D1 unchanged. Replacement is
   preceded by a Time Travel bookmark, a full SQL evidence export, and a
   read-back-verified R2 archive of the candidate; a failure during or after

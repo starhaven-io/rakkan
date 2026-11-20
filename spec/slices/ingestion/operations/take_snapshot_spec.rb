@@ -3,14 +3,26 @@
 RSpec.describe Ingestion::Operations::TakeSnapshot, :db do
   subject(:operation) { Ingestion::Slice["operations.take_snapshot"] }
 
+  it "checks and records the observation in an immediate transaction" do
+    create_registry!
+    db = Hanami.app["relations.packages"].dataset.db
+    allow(db).to receive(:transaction).and_call_original
+
+    operation.call
+
+    expect(db).to have_received(:transaction).with(mode: :immediate)
+  end
+
   it "records adoption stats for the day" do
     registry = create_registry!
     provenant = create_package!(registry, name: "psych", first_provenant_at: Time.utc(2026, 1, 1))
+    checked_at = Time.utc(2026, 8, 14)
     create_version!(provenant, number: "5.1.0",
+                               provenance_checked_at: checked_at,
                                provenance: { provenance_kind: "sigstore_attestation", attestation_count: 1 })
-    create_version!(provenant, number: "5.0.0")
+    create_version!(provenant, number: "5.0.0", provenance_checked_at: checked_at)
     plain = create_package!(registry, name: "rack")
-    create_version!(plain, number: "3.2.7")
+    create_version!(plain, number: "3.2.7", provenance_checked_at: checked_at)
     create_version!(plain, number: "3.2.6", yanked: true)
 
     result = operation.call(taken_on: Date.new(2026, 8, 14))
@@ -75,6 +87,27 @@ RSpec.describe Ingestion::Operations::TakeSnapshot, :db do
     )
 
     expect(result.value!).to include(tracked_versions: 1, provenant_versions: 1)
+  end
+
+  it "preserves a complete same-day snapshot until every eligible release has an observation" do
+    registry = create_registry!(name: "cratesio")
+    pkg = create_package!(registry, name: "serde")
+    date = Date.new(2026, 9, 7)
+    create_snapshot!(registry, taken_on: date, tracked: 10, provenant: 3)
+    create_version!(pkg, number: "0.1.0", published_at: Time.utc(2025, 7, 3))
+    unknown = create_version!(pkg, number: "0.2.0", published_at: nil)
+    versions = Hanami.app["relations.package_versions"]
+    snapshot = -> { operation.call(registry_name: "cratesio", taken_on: date) }
+
+    expect { snapshot.call }.to raise_error(described_class::IncompleteObservation, /unchecked tracked versions/)
+    versions.by_pk(unknown).command(:update).call(provenance_checked_at: Time.utc(2026, 9, 7))
+    floor = create_version!(pkg, number: "0.3.0", published_at: Time.utc(2025, 7, 4))
+    expect { snapshot.call }.to raise_error(described_class::IncompleteObservation, /unchecked tracked versions/)
+    expect(Hanami.app["repos.adoption_snapshot_repo"].latest(registry.id))
+      .to have_attributes(tracked_packages: 10, provenant_packages: 3)
+
+    versions.by_pk(floor).command(:update).call(provenance_checked_at: Time.utc(2026, 9, 7))
+    expect(snapshot.call.value!).to include(tracked_packages: 1, tracked_versions: 3, provenant_versions: 0)
   end
 
   it "fails cleanly for an unknown registry" do

@@ -5,6 +5,8 @@ module Ingestion
     # Compute today's adoption stats for a registry and record them,
     # replacing any snapshot already taken today (safe to re-run).
     class TakeSnapshot < Ingestion::Operation
+      class IncompleteObservation < StandardError; end
+
       include Deps[
         "repos.registry_repo",
         "repos.adoption_snapshot_repo",
@@ -20,34 +22,33 @@ module Ingestion
         registry = registry_repo.by_name(registry_name)
         raise ArgumentError, "registry #{registry_name} is not seeded; run ingest:seed first" unless registry
 
-        tracked = packages.tracked.where(registry_id: registry.id)
         waivers ||= Ingestion::ProvenanceWaivers.load(today: waiver_date)
         waivers = waivers.for_registry(registry_name)
-        stats = {
-          tracked_packages: tracked.count,
-          provenant_packages: tracked.provenant.count,
-          tracked_versions: version_counts(registry.id, provenant_only: false, waivers:),
-          provenant_versions: version_counts(registry.id, provenant_only: true, waivers:)
-        }
+        adapter_key = "adapters.#{registry_name}"
+        available_since = Ingestion::Slice[adapter_key].provenance_available_since if Ingestion::Slice.key?(adapter_key)
 
-        adoption_snapshot_repo.record(registry_id: registry.id, taken_on:, **stats)
-        stats.merge(taken_on:)
+        # Keep the readiness check, counts, and same-day upsert on one SQLite snapshot.
+        packages.dataset.db.transaction(mode: :immediate) do
+          eligible = package_versions.tracked_release_dataset(registry.id, available_since:)
+          unchecked = eligible.where(Sequel[:package_versions][:provenance_checked_at] => nil)
+          unless exclude_unresolved_waivers(unchecked, waivers).empty?
+            raise IncompleteObservation, "#{registry_name} has unchecked tracked versions. Run ingest:refresh first."
+          end
+
+          versions = exclude_unresolved_waivers(package_versions.tracked_release_dataset(registry.id), waivers)
+          tracked = packages.tracked.where(registry_id: registry.id)
+          stats = {
+            tracked_packages: tracked.count,
+            provenant_packages: tracked.provenant.count,
+            tracked_versions: versions.count,
+            provenant_versions: versions.exclude(Sequel[:package_versions][:provenance_kind] => nil).count
+          }
+          adoption_snapshot_repo.record(registry_id: registry.id, taken_on:, **stats)
+          stats.merge(taken_on:)
+        end
       end
 
       private
-
-      # Versions of tracked packages, excluding yanked rows. Sequel join via
-      # the dataset because the tracked flag lives on packages.
-      def version_counts(registry_id, provenant_only:, waivers:)
-        ds = package_versions.dataset
-                             .join(:packages, id: :package_id)
-                             .where(Sequel[:packages][:registry_id] => registry_id)
-                             .where(Sequel[:packages][:tracked] => true)
-                             .where(Sequel[:package_versions][:yanked] => false)
-        ds = exclude_unresolved_waivers(ds, waivers)
-        ds = ds.exclude(Sequel[:package_versions][:provenance_kind] => nil) if provenant_only
-        ds.count
-      end
 
       def exclude_unresolved_waivers(dataset, waivers)
         return dataset if waivers.empty?
