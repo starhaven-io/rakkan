@@ -47,6 +47,8 @@ content changes fail closed.
   Active exact waivers and releases known to predate the registry's provenance
   mechanism keep their existing treatment. An incomplete refresh can persist its
   progress while preserving the last complete observation.
+- The refresh compares all four restored table counts with the production counts
+  in the recovery manifest before ingesting new data. A mismatch stops publication.
 - A failure before replacement leaves production D1 unchanged. Replacement is
   preceded by a Time Travel bookmark, a full SQL evidence export, and a
   read-back-verified R2 archive of the candidate; a failure during or after
