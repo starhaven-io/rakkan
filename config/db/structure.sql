@@ -78,9 +78,13 @@ CREATE INDEX `package_versions_package_id_provenance_kind_index` ON `package_ver
 CREATE INDEX `package_versions_published_at_index` ON `package_versions`(
   `published_at`
 );
+CREATE INDEX `package_versions_latest_by_package_index` ON `package_versions`(
+  `package_id`
+) WHERE((`latest` = 1) AND(`yanked` = 0));
 INSERT INTO schema_migrations (filename) VALUES
 ('20260814001053_create_registries.rb'),
 ('20260814001054_create_packages.rb'),
 ('20260814001055_create_adoption_snapshots.rb'),
 ('20260814001056_create_package_versions.rb'),
-('20260814173513_add_feed_synced_at_to_registries.rb');
+('20260814173513_add_feed_synced_at_to_registries.rb'),
+('20261117120000_index_latest_package_versions.rb');
