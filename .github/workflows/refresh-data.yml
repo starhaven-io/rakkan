@@ -206,6 +206,7 @@ jobs:
       - name: Restore production history
         env:
           D1_DATA_SQL: ${{ runner.temp }}/rakkan-d1-data.sql
+          D1_RECOVERY_MANIFEST: ${{ runner.temp }}/rakkan-d1-recovery.json
         run: |
           sqlite3 db/rakkan.sqlite <<SQL
           .bail on
@@ -220,8 +221,9 @@ jobs:
 
           for table in registries packages package_versions adoption_snapshots; do
             rows="$(sqlite3 db/rakkan.sqlite "SELECT COUNT(*) FROM ${table};")"
-            if (( rows == 0 )); then
-              echo "::error::production export contained no ${table} rows"
+            expected="$(jq -er --arg table "${table}" '.counts[$table]' "${D1_RECOVERY_MANIFEST}")"
+            if [[ "${rows}" != "${expected}" ]]; then
+              echo "::error::row count for ${table} differs (restored ${rows}, production ${expected})"
               exit 1
             fi
           done
