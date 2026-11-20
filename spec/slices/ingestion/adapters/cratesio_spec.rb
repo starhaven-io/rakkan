@@ -246,4 +246,16 @@ RSpec.describe Ingestion::Adapters::Cratesio do
     expect { adapter.fetch_provenance(name: "example", number: "1.0.0", platform: "rust") }
       .to raise_error(Ingestion::HTTPClient::Error, /version object/)
   end
+
+  it "leaves a missing trustpub_data field unresolved in batch and individual responses" do
+    version = { number: "1.0.0", platform: "" }
+    payload = { "num" => "1.0.0" }
+    responses["https://crates.io/api/v1/crates/example/versions"] = { "versions" => [payload] }
+    responses["https://crates.io/api/v1/crates/example/1.0.0"] = { "version" => payload }
+
+    expect(adapter.each_provenance(name: "example", versions: [version]).to_a)
+      .to contain_exactly([version, nil, an_instance_of(Ingestion::HTTPClient::InvalidDataError)])
+    expect { adapter.fetch_provenance(name: "example", **version) }
+      .to raise_error(Ingestion::HTTPClient::InvalidDataError, /missing trustpub_data/)
+  end
 end

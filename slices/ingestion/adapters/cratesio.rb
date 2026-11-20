@@ -110,7 +110,7 @@ module Ingestion
                 "crates.io version response must contain a version object"
         end
 
-        provenance_from(version["trustpub_data"])
+        provenance_from(version)
       end # rubocop:enable Lint/UnusedMethodArgument
 
       # The versions endpoint exposes the same trustpub_data as the
@@ -141,7 +141,7 @@ module Ingestion
         versions.each do |version|
           payload = versions_by_number[version[:number]]
           provenance = if payload
-                         provenance_from(payload["trustpub_data"])
+                         provenance_from(payload)
                        else
                          fetch_provenance(name:, number: version[:number], platform: version[:platform])
                        end
@@ -154,7 +154,10 @@ module Ingestion
 
       private
 
-      def provenance_from(trustpub)
+      def provenance_from(version)
+        trustpub = version.fetch("trustpub_data") do
+          raise Ingestion::HTTPClient::InvalidDataError, "crates.io version response is missing trustpub_data"
+        end
         return nil if trustpub.nil?
         unless trustpub.is_a?(Hash)
           raise Ingestion::HTTPClient::InvalidDataError,
