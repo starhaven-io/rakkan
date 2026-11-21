@@ -3,6 +3,13 @@ import { test } from 'node:test';
 
 import { canonicalPageRedirect, clampPage, MAX_PAGE, pageHref, parsePage } from '../src/lib/pagination.ts';
 
+test('search pagination preserves the literal query when moving between pages', () => {
+  const params = new URLSearchParams({ q: 'aws & %', page: '9' });
+  assert.equal(pageHref('/search', 2, params), '/search?q=aws+%26+%25&page=2');
+  assert.equal(pageHref('/search', 1, params), '/search?q=aws+%26+%25');
+  assert.equal(params.get('page'), '9');
+});
+
 test('page parsing is canonical and bounded', () => {
   assert.equal(parsePage(null), 1);
   assert.equal(parsePage(''), 1);

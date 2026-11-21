@@ -6,17 +6,18 @@ interface Props {
   page: number;
   pageCount: number;
   label: string;
+  query?: URLSearchParams;
 }
 
-const { path, page, pageCount, label } = Astro.props;
+const { path, page, pageCount, label, query } = Astro.props;
 ---
 
 {pageCount > 1 && (
   <nav class="pagination" aria-label={label}>
-    {page > 1 ? <a href={pageHref(path, page - 1)}>← Previous</a> : <span aria-hidden="true">← Previous</span>}
+    {page > 1 ? <a href={pageHref(path, page - 1, query)}>← Previous</a> : <span aria-hidden="true">← Previous</span>}
     <span>
       Page <strong>{page}</strong> of <strong>{pageCount}</strong>
     </span>
-    {page < pageCount ? <a href={pageHref(path, page + 1)}>Next →</a> : <span aria-hidden="true">Next →</span>}
+    {page < pageCount ? <a href={pageHref(path, page + 1, query)}>Next →</a> : <span aria-hidden="true">Next →</span>}
   </nav>
 )}

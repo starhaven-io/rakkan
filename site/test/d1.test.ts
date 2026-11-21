@@ -19,6 +19,7 @@ import {
   recentConversions,
   registryByName,
   searchPackages,
+  searchPage,
   snapshotSeries,
   trackedPage,
   trackedSummary,
@@ -264,6 +265,25 @@ test('version and search queries execute against the exported SQLite shape', asy
     (await searchPackages(db, 2, 'rack', 10)).map((pkg) => pkg.name),
     ['rack-main'],
   );
+});
+
+test('search counts all matches and clamps pages inside the tracked registry', async (t) => {
+  const db = database(t);
+  const first = await searchPage(db, 1, 'rack', 1, 1);
+  const last = await searchPage(db, 1, 'rack', 99, 1);
+  assert.equal(first.total, 2);
+  assert.equal(last.page, 2);
+  assert.equal(last.pageCount, 2);
+  assert.deepEqual(
+    first.items.map((pkg) => pkg.name),
+    ['rack-main'],
+  );
+  assert.deepEqual(
+    last.items.map((pkg) => pkg.name),
+    ['rack%literal'],
+  );
+  assert.equal((await searchPage(db, 1, 'rack%', 1)).total, 1);
+  assert.deepEqual(await searchPage(db, 2, 'absent', 3), { items: [], total: 0, page: 1, pageCount: 1 });
 });
 
 test('package detail loading keeps package and versions inside one registry', async (t) => {
