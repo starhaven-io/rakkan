@@ -217,7 +217,7 @@ h3 {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: 1.4fr 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
   border-top: 1px solid var(--ink);
   border-bottom: 1px solid var(--rule);
   margin-bottom: 2.25rem;
@@ -516,26 +516,30 @@ code {
 
 @media (max-width: 52rem) {
   .header-inner {
-    flex-wrap: wrap;
+    display: grid;
+    grid-template: 'brand nav source' auto 'search search search' auto / auto 1fr auto;
+    gap: 0.65rem 0.8rem;
+    padding-block: 0.75rem;
+  }
+  .brand {
+    grid-area: brand;
+  }
+  .registry-nav {
+    grid-area: nav;
+    margin: 0;
+    justify-content: center;
+  }
+  .gh {
+    grid-area: source;
+    justify-self: end;
   }
   .site-search {
-    flex-basis: 100%;
+    grid-area: search;
+    margin: 0;
   }
   .site-search input {
     flex: 1;
     width: auto;
-  }
-  .stats-grid {
-    grid-template-columns: 1fr 1fr;
-  }
-  .stats-grid .stat-card {
-    border-left: 0;
-    padding-left: 0;
-    border-top: 1px solid var(--rule);
-  }
-  .stats-grid .stat-card:first-child,
-  .stats-grid .stat-card:nth-child(2) {
-    border-top: 0;
   }
   .content-grid {
     grid-template-columns: 1fr;
@@ -548,5 +552,48 @@ code {
   }
   .hide-mobile {
     display: none;
+  }
+}
+
+@media (max-width: 46rem) {
+  .stats-grid {
+    grid-template-columns: 1fr;
+    margin-bottom: 1.5rem;
+  }
+  .stat-card,
+  .stat-card + .stat-card {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: baseline;
+    column-gap: 0.8rem;
+    padding: 0.7rem 0;
+    border-left: 0;
+  }
+  .stat-card + .stat-card {
+    border-top: 1px solid var(--rule);
+  }
+  .stat-label,
+  .stat-detail,
+  .stat-note {
+    margin: 0;
+  }
+  .stat-value {
+    font-size: 1.45rem;
+  }
+  .stat-detail,
+  .stat-note {
+    grid-column: 1 / -1;
+  }
+  .page-shell {
+    padding-top: 1.5rem;
+  }
+}
+
+@media (max-width: 28rem) {
+  .header-inner {
+    grid-template: 'brand source' auto 'nav nav' auto 'search search' auto / 1fr auto;
+  }
+  .registry-nav {
+    justify-content: start;
   }
 }
