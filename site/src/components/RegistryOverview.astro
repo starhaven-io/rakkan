@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import AdoptionHistory from './AdoptionHistory.astro';
 import { getDb } from '../lib/db.ts';
 import { latestSnapshot, recentConversions, registryByName, snapshotSeries, topPackages } from '../lib/d1.ts';
 import { formatCount, packageNoun, percentage, safeHttpsUrl, shortDate } from '../lib/format.ts';
@@ -91,52 +92,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
         </article>
       </section>
 
-      <section class="panel">
-        <header class="panel-header">
-          <div>
-            <h2>Adoption over time</h2>
-            <p>{site.historyDescription}</p>
-          </div>
-          <span class="panel-meta">
-            {series.length} {series.length === 1 ? 'point' : 'points'}
-          </span>
-        </header>
-        <div class="table-wrap">
-          <table>
-            <caption class="visually-hidden">Historical publishing-provenance adoption snapshots</caption>
-            <thead>
-              <tr>
-                <th>Date (UTC)</th>
-                <th class="num">Packages with provenance</th>
-                <th class="num">Adoption</th>
-                <th class="num hide-mobile">Versions with provenance</th>
-              </tr>
-            </thead>
-            <tbody>
-              {series.map((snap) => {
-                const rate = percentage(snap.provenant_packages, snap.tracked_packages);
-                return (
-                  <tr>
-                    <td class="date-cell">{shortDate(snap.taken_on)}</td>
-                    <td class="num">
-                      {formatCount(snap.provenant_packages)} / {formatCount(snap.tracked_packages)}
-                    </td>
-                    <td class="num">
-                      <div class="trend-value">
-                        <div class="trend-bar" aria-hidden="true">
-                          <span style={`width: ${rate}%`} />
-                        </div>
-                        <strong>{rate}%</strong>
-                      </div>
-                    </td>
-                    <td class="num hide-mobile">{formatCount(snap.provenant_versions)}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <AdoptionHistory series={series} description={site.historyDescription} />
 
       <div class="content-grid">
         <section class="panel">
