@@ -5,9 +5,8 @@ import { getDb } from './lib/db.ts';
 
 // Cloudflare applies public/_headers only to static assets, but every rakkan
 // route is SSR, so responses would ship without these headers. Set-if-absent
-// lets a route opt out. style-src keeps 'unsafe-inline' because the progress
-// and trend bars set width via style attributes; img-src allows data: for the
-// inline SVG favicon. No scripts ship at all, but script-src 'self' leaves
+// lets a route opt out. img-src allows the data URL used by the favicon.
+// No scripts ship at all, but script-src 'self' leaves
 // room for a future bundled script without a policy change.
 const SECURITY_HEADERS: Record<string, string> = {
   'X-Frame-Options': 'DENY',
@@ -20,7 +19,7 @@ const SECURITY_HEADERS: Record<string, string> = {
   'Cross-Origin-Opener-Policy': 'same-origin',
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Content-Security-Policy':
-    "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 };
 
 // The heavy read-only pages (overview, 1,000-row index, per-package version
