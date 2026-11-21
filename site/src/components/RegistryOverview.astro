@@ -2,7 +2,7 @@
 import Base from '../layouts/Base.astro';
 import AdoptionHistory from './AdoptionHistory.astro';
 import { getDb } from '../lib/db.ts';
-import { latestSnapshot, recentConversions, registryByName, snapshotSeries, topPackages } from '../lib/d1.ts';
+import { latestReleaseCoverage, recentConversions, registryByName, snapshotSeries, topPackages } from '../lib/d1.ts';
 import { formatCount, packageNoun, percentage, safeHttpsUrl, shortDate } from '../lib/format.ts';
 import { registrySite, type RegistrySlug } from '../lib/registries.ts';
 
@@ -14,14 +14,20 @@ const { slug } = Astro.props;
 const site = registrySite(slug);
 const db = getDb();
 const registry = await registryByName(db, slug);
-const snapshot = registry ? await latestSnapshot(db, registry.id) : null;
-const series = registry ? await snapshotSeries(db, registry.id) : [];
-const conversions = registry ? await recentConversions(db, registry.id) : [];
-const top = registry ? await topPackages(db, registry.id) : [];
+const [series, coverage, conversions, top] = registry
+  ? await Promise.all([
+      snapshotSeries(db, registry.id),
+      latestReleaseCoverage(db, registry.id),
+      recentConversions(db, registry.id),
+      topPackages(db, registry.id),
+    ])
+  : ([[], null, [], []] as const);
+const snapshot = series[0];
+const negativeSignal = slug === 'rubygems' ? 'attestations' : 'trusted-publisher metadata';
 
 const adoptionRate = snapshot ? percentage(snapshot.provenant_packages, snapshot.tracked_packages) : 0;
 const versionRate = snapshot ? percentage(snapshot.provenant_versions, snapshot.tracked_versions) : 0;
-const packageWord = packageNoun(registry?.name, snapshot?.tracked_packages ?? 2);
+const packageWord = packageNoun(registry?.name, coverage?.total ?? 2);
 const singularPackage = packageNoun(registry?.name);
 const registryUrl = safeHttpsUrl(registry?.url);
 ---
@@ -32,7 +38,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
   title={slug === 'cratesio' && registry ? `${registry.display_name} · rakkan` : undefined}
   description={`Trusted publishing adoption among the most-downloaded ${packageWord} on ${registry?.display_name ?? 'the selected registry'}.`}
 >
-  {!registry ? (
+  {!registry || !coverage ? (
     <section class="empty-state">
       <h1>No data yet</h1>
       <p>Package data is not available for this registry yet. Please check back later.</p>
@@ -52,8 +58,8 @@ const registryUrl = safeHttpsUrl(registry?.url);
         <div class="hero-copy">
           <h1>{registry.display_name}</h1>
           <p>
-            Trusted publishing adoption among the top {formatCount(snapshot.tracked_packages)} {packageWord} by total
-            downloads. {site.adoptionDescription(singularPackage)}
+            Trusted publishing adoption among the top {formatCount(coverage.total)} {packageWord} by total downloads.{' '}
+            {site.adoptionDescription(singularPackage)}
           </p>
         </div>
         <div class="hero-actions">
@@ -65,29 +71,37 @@ const registryUrl = safeHttpsUrl(registry?.url);
         </div>
       </section>
 
-      <section class="stats-grid" aria-label="Latest adoption snapshot">
+      <section class="stats-grid" aria-label="Publishing provenance">
         <article class="stat-card featured">
-          <span class="stat-label">Package adoption</span>
+          <span class="stat-label">Historical adoption</span>
           <strong class="stat-value">{adoptionRate}%</strong>
-          <div class="progress-track" aria-hidden="true">
-            <div class="progress-fill" style={`width: ${adoptionRate}%`} />
-          </div>
           <span class="stat-detail">
-            {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)} tracked {packageWord}
+            {formatCount(snapshot.provenant_packages)} of {formatCount(snapshot.tracked_packages)} {packageWord} had
+            provenance on a non-yanked release as of{' '}
+            <time datetime={snapshot.taken_on}>{shortDate(snapshot.taken_on)}</time>.
           </span>
         </article>
         <article class="stat-card">
-          <span class="stat-label">Adopted packages</span>
-          <strong class="stat-value">{formatCount(snapshot.provenant_packages)}</strong>
+          <span class="stat-label">Latest release coverage</span>
+          <strong class="stat-value">
+            {coverage.total === coverage.unknown
+              ? 'Pending'
+              : `${coverage.unknown > 0 ? '≥' : ''}${percentage(coverage.observed, coverage.total)}%`}
+          </strong>
           <span class="stat-detail">
-            {packageWord.charAt(0).toUpperCase() + packageWord.slice(1)} with at least one release carrying provenance
+            {formatCount(coverage.observed)} of {formatCount(coverage.total)} {packageWord} have evidence on at least
+            one non-yanked release marked latest in the registry dump.
+          </span>
+          <span class="stat-note">
+            {formatCount(coverage.checked_without_evidence)} checked without {negativeSignal} ·{' '}
+            {formatCount(coverage.unknown)} unresolved
           </span>
         </article>
         <article class="stat-card">
           <span class="stat-label">Versions with provenance</span>
           <strong class="stat-value">{formatCount(snapshot.provenant_versions)}</strong>
           <span class="stat-detail">
-            {versionRate}% of {formatCount(snapshot.tracked_versions)} tracked versions
+            {versionRate}% of {formatCount(snapshot.tracked_versions)} tracked versions in the same snapshot.
           </span>
         </article>
       </section>

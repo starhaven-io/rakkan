@@ -61,6 +61,15 @@ The committed dump time and source are in each registry's
 in D1's single-row `export_meta` table. Workflow summaries report dump times,
 tracked row counts, remaining provenance work, and publication results.
 
+The dashboard dates historical adoption to its registry's last complete
+snapshot. Latest release coverage instead uses the current export and the
+registry dump's latest flags. Each tracked package counts once if any of
+its non-yanked latest releases has observed provenance. A package has a
+known negative result only after every such release has been checked. Packages
+with missing checks or no designated latest release remain unresolved unless
+another latest release already has evidence. RubyGems attestation coverage
+is a lower bound on trusted publishing.
+
 Scheduled seed and refresh workflows maintain one open failure issue per
 operation and close it after recovery. A stale manifest, missing scheduled run,
 or persistent remaining backlog is actionable even when the public site still

@@ -253,18 +253,16 @@ h3 {
   color: var(--seal);
 }
 .stat-detail {
+  display: block;
+  margin-top: 0.5rem;
   color: var(--ink-soft);
+  font-size: 0.9rem;
+}
+.stat-note {
+  display: block;
+  color: var(--ink-faint);
+  margin-top: 0.4rem;
   font-size: 0.82rem;
-}
-
-.progress-track {
-  height: 0.3rem;
-  margin: 0.8rem 0 0.45rem;
-  background: var(--rule-soft);
-}
-.progress-fill {
-  height: 100%;
-  background: var(--seal);
 }
 
 .panel {
