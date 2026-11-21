@@ -1,0 +1,102 @@
+---
+import type { Snapshot } from '../lib/d1.ts';
+import { formatCount, percentage, shortDate } from '../lib/format.ts';
+import { adoptionTrend } from '../lib/history.ts';
+
+interface Props {
+  series: readonly Snapshot[];
+  description: string;
+}
+
+const { series, description } = Astro.props;
+const trend = adoptionTrend(series);
+---
+
+<section class="panel">
+  <header class="panel-header">
+    <div>
+      <h2>Adoption over time</h2>
+      {trend && (
+        <p>
+          {trend.delta === 0
+            ? 'Unchanged'
+            : `${trend.delta > 0 ? 'Up' : 'Down'} ${Math.abs(trend.delta)} percentage ${Math.abs(trend.delta) === 1 ? 'point' : 'points'}`}
+          {' since '}
+          <time datetime={trend.previous.date}>{shortDate(trend.previous.date)}</time>.
+        </p>
+      )}
+    </div>
+  </header>
+  {trend && (
+    <figure class="history-chart">
+      <div class="chart-axis" aria-hidden="true">
+        <span>{trend.upper}%</span>
+        <span>{trend.lower}%</span>
+      </div>
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Package adoption from ${trend.first.rate}% on ${shortDate(trend.first.date)} to ${trend.last.rate}% on ${shortDate(trend.last.date)}. Scale ${trend.lower}% to ${trend.upper}%.`}
+      >
+        <polyline
+          points={trend.points}
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          vector-effect="non-scaling-stroke"
+        />
+      </svg>
+      <figcaption>
+        <span>
+          <time datetime={trend.first.date}>{shortDate(trend.first.date)}</time> · {trend.first.rate}%
+        </span>
+        <span>
+          <time datetime={trend.last.date}>{shortDate(trend.last.date)}</time> · {trend.last.rate}%
+        </span>
+      </figcaption>
+    </figure>
+  )}
+  <details class="history-data" open={!trend}>
+    <summary>
+      Full history ({formatCount(series.length)} {series.length === 1 ? 'observation' : 'observations'})
+    </summary>
+    <div class="table-wrap">
+      <table>
+        <caption>
+          Package and version counts show observed provenance.<span class="visually-hidden">{` ${description}`}</span>
+        </caption>
+        <thead>
+          <tr>
+            <th scope="col">Date (UTC)</th>
+            <th scope="col" class="num">
+              Packages
+            </th>
+            <th scope="col" class="num">
+              Adoption
+            </th>
+            <th scope="col" class="num">
+              Versions with provenance
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {series.map((snapshot) => (
+            <tr>
+              <td class="date-cell">
+                <time datetime={snapshot.taken_on}>{shortDate(snapshot.taken_on)}</time>
+              </td>
+              <td class="num">
+                {formatCount(snapshot.provenant_packages)} / {formatCount(snapshot.tracked_packages)}
+              </td>
+              <td class="num">
+                <strong>{percentage(snapshot.provenant_packages, snapshot.tracked_packages)}%</strong>
+              </td>
+              <td class="num">{formatCount(snapshot.provenant_versions)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</section>
