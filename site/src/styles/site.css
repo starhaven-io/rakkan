@@ -3,7 +3,7 @@
   --paper: #faf7f2;
   --ink: #1a1713;
   --ink-soft: #57504a;
-  --ink-faint: #8a8178;
+  --ink-faint: #6b625a;
   --rule: #e3dcd1;
   --rule-soft: #eee8de;
   --seal: #b3271e;
@@ -234,7 +234,7 @@ h3 {
   margin-bottom: 0.5rem;
   color: var(--ink-faint);
   font-family: var(--mono);
-  font-size: 0.66rem;
+  font-size: 0.72rem;
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
@@ -321,7 +321,7 @@ td {
 th {
   color: var(--ink-faint);
   font-family: var(--mono);
-  font-size: 0.64rem;
+  font-size: 0.72rem;
   font-weight: 500;
   letter-spacing: 0.09em;
   text-transform: uppercase;
