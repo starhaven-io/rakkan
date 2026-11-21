@@ -73,6 +73,13 @@ export interface Snapshot {
   provenant_versions: number;
 }
 
+export interface LatestReleaseCoverage {
+  total: number;
+  observed: number;
+  checked_without_evidence: number;
+  unknown: number;
+}
+
 export interface PackageRow {
   name: string;
   rank: number | null;
@@ -193,6 +200,29 @@ export async function snapshotSeries(db: D1, registryId: number): Promise<Snapsh
     .bind(registryId)
     .all<Snapshot>();
   return results;
+}
+
+export async function latestReleaseCoverage(db: D1, registryId: number): Promise<LatestReleaseCoverage> {
+  const row = await db
+    .prepare(
+      `WITH latest AS (
+         SELECT p.id,
+                MAX(v.provenance_checked_at IS NOT NULL AND v.provenance_kind IS NOT NULL) AS has_evidence,
+                MIN(v.provenance_checked_at IS NOT NULL) AS all_checked
+           FROM packages p
+           LEFT JOIN package_versions v ON v.package_id = p.id AND v.latest = 1 AND v.yanked = 0
+          WHERE p.registry_id = ? AND p.tracked = 1
+          GROUP BY p.id
+       )
+       SELECT COUNT(*) AS total,
+              COUNT(*) FILTER (WHERE has_evidence) AS observed,
+              COUNT(*) FILTER (WHERE NOT has_evidence AND all_checked) AS checked_without_evidence,
+              COUNT(*) FILTER (WHERE NOT has_evidence AND NOT all_checked) AS unknown
+         FROM latest`,
+    )
+    .bind(registryId)
+    .first<LatestReleaseCoverage>();
+  return row ?? { total: 0, observed: 0, checked_without_evidence: 0, unknown: 0 };
 }
 
 export async function recentConversions(db: D1, registryId: number, limit = 10): Promise<PackageRow[]> {

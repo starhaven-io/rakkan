@@ -14,6 +14,7 @@ import {
   healthPayload,
   SchemaVersionError,
   latestSnapshot,
+  latestReleaseCoverage,
   loadPackageDetail,
   packageByName,
   recentConversions,
@@ -205,6 +206,39 @@ test('snapshot queries stay registry-scoped and newest-first', async (t) => {
   assert.deepEqual(
     snapshots.map((snapshot) => snapshot.taken_on),
     ['2026-08-17', '2026-08-10'],
+  );
+});
+
+test('latest release coverage counts packages once and keeps incomplete checks unresolved', async (t) => {
+  const db = database(t);
+  const status = async () => ({ ...(await latestReleaseCoverage(db, 1)) });
+  const add = db.sqlite.prepare(`
+    INSERT INTO package_versions (package_id, number, platform, latest, yanked, provenance_kind,
+                                  provenance_checked_at, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`);
+  const checked = '2026-08-22 15:00:00';
+  const attested = 'sigstore_attestation';
+  const observed = { total: 2, observed: 1, checked_without_evidence: 0, unknown: 1 };
+
+  add.run(1, '2.0.0', 'java', 1, 0, null, null);
+  add.run(2, '1.0.0', 'ruby', 0, 0, attested, checked);
+  add.run(2, '2.0.0', 'ruby', 1, 1, attested, checked);
+  add.run(3, '1.0.0', 'ruby', 1, 0, attested, checked);
+  assert.deepEqual(await status(), observed);
+  add.run(2, '2.0.1', 'ruby', 1, 0, null, checked);
+  assert.deepEqual(await status(), { ...observed, checked_without_evidence: 1, unknown: 0 });
+  add.run(2, '2.0.1', 'java', 1, 0, null, null);
+  assert.deepEqual(await status(), observed);
+  add.run(2, '2.0.1', 'arm64-darwin', 1, 0, attested, checked);
+  assert.deepEqual(await status(), { ...observed, observed: 2, unknown: 0 });
+  assert.deepEqual(
+    { ...(await latestReleaseCoverage(db, 999)) },
+    {
+      total: 0,
+      observed: 0,
+      checked_without_evidence: 0,
+      unknown: 0,
+    },
   );
 });
 
