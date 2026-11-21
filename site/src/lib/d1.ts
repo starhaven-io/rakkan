@@ -1,5 +1,5 @@
 import { escapeLike } from './format.ts';
-import { clampPage, PACKAGE_PAGE_SIZE, VERSION_PAGE_SIZE } from './pagination.ts';
+import { clampPage, PACKAGE_PAGE_SIZE, SEARCH_PAGE_SIZE, VERSION_PAGE_SIZE } from './pagination.ts';
 import schemaContract from '../../schema-contract.json' with { type: 'json' };
 
 function validVersion(value: unknown): value is number {
@@ -343,16 +343,38 @@ export async function loadPackageDetail(
   };
 }
 
-export async function searchPackages(db: D1, registryId: number, query: string, limit = 50): Promise<PackageRow[]> {
-  const escaped = escapeLike(query);
+const SEARCH_SCOPE = "FROM packages WHERE registry_id = ? AND tracked = 1 AND name LIKE ? ESCAPE '\\'";
+
+export async function searchPackages(
+  db: D1,
+  registryId: number,
+  query: string,
+  limit = SEARCH_PAGE_SIZE,
+  offset = 0,
+): Promise<PackageRow[]> {
   const { results } = await db
     .prepare(
-      `SELECT name, rank, downloads_total, first_provenant_at
-         FROM packages
-        WHERE registry_id = ? AND tracked = 1 AND name LIKE ? ESCAPE '\\'
-        ORDER BY downloads_total DESC, name ASC LIMIT ?`,
+      `SELECT name, rank, downloads_total, first_provenant_at ${SEARCH_SCOPE}
+        ORDER BY downloads_total DESC, name ASC LIMIT ? OFFSET ?`,
     )
-    .bind(registryId, `%${escaped}%`, limit)
+    .bind(registryId, `%${escapeLike(query)}%`, limit, offset)
     .all<PackageRow>();
   return results;
+}
+
+export async function searchPage(
+  db: D1,
+  registryId: number,
+  query: string,
+  requestedPage: number,
+  pageSize = SEARCH_PAGE_SIZE,
+): Promise<PageResult<PackageRow>> {
+  const count = await db
+    .prepare(`SELECT COUNT(*) AS total ${SEARCH_SCOPE}`)
+    .bind(registryId, `%${escapeLike(query)}%`)
+    .first<{ total: number }>();
+  const total = count?.total ?? 0;
+  const { page, pageCount } = clampPage(requestedPage, total, pageSize);
+  const items = await searchPackages(db, registryId, query, pageSize, (page - 1) * pageSize);
+  return { items, total, page, pageCount };
 }

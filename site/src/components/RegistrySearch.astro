@@ -1,9 +1,11 @@
 ---
 import Base from '../layouts/Base.astro';
+import Pagination from './Pagination.astro';
 import { getDb } from '../lib/db.ts';
-import { registryByName, searchPackages } from '../lib/d1.ts';
+import { registryByName, searchPage } from '../lib/d1.ts';
 import { formatCount, packageNoun, searchResultSummary, shortDate } from '../lib/format.ts';
 import { registrySite, type RegistrySlug } from '../lib/registries.ts';
+import { parsePage } from '../lib/pagination.ts';
 
 interface Props {
   slug: RegistrySlug;
@@ -14,7 +16,8 @@ const { slug, query } = Astro.props;
 const site = registrySite(slug);
 const db = getDb();
 const registry = await registryByName(db, slug);
-const results = query && registry ? await searchPackages(db, registry.id, query) : [];
+const requestedPage = parsePage(Astro.url.searchParams.get('page'));
+const result = query && registry ? await searchPage(db, registry.id, query, requestedPage) : null;
 ---
 
 <Base
@@ -38,7 +41,7 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
       <h2>Search by package name</h2>
       <p>Use the search field above.</p>
     </section>
-  ) : results.length === 0 ? (
+  ) : !result?.total ? (
     <section class="empty-state compact">
       <h2>No tracked packages found</h2>
       <p>
@@ -52,7 +55,7 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
           <h2>
             Results for <code>{query}</code>
           </h2>
-          <p>{searchResultSummary(registry?.name, registry?.display_name, results.length)}</p>
+          <p>{searchResultSummary(registry?.name, registry?.display_name, result.items.length, result.total)}</p>
         </div>
       </header>
       <div class="table-wrap">
@@ -66,7 +69,7 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
             </tr>
           </thead>
           <tbody>
-            {results.map((pkg) => (
+            {result.items.map((pkg) => (
               <tr>
                 <td>
                   <a class="package-name" href={site.packagePath(pkg.name)}>
@@ -86,6 +89,13 @@ const results = query && registry ? await searchPackages(db, registry.id, query)
           </tbody>
         </table>
       </div>
+      <Pagination
+        path={site.searchPath}
+        page={result.page}
+        pageCount={result.pageCount}
+        label="Search result pages"
+        query={new URLSearchParams({ q: query })}
+      />
     </section>
   )}
 </Base>
