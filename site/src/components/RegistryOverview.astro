@@ -157,6 +157,11 @@ const registryUrl = safeHttpsUrl(registry?.url);
                 </tr>
               </thead>
               <tbody>
+                {conversions.length === 0 && (
+                  <tr>
+                    <td colspan="3">No adoption observed yet.</td>
+                  </tr>
+                )}
                 {conversions.map((pkg) => (
                   <tr>
                     <td>
@@ -177,7 +182,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
           <header class="panel-header">
             <div>
               <h2>Most downloaded</h2>
-              <p>The head of the tracked set.</p>
+              <p>Ranked by total downloads.</p>
             </div>
             <span class="panel-meta">
               <a href={site.packagesPath}>browse all →</a>
@@ -206,7 +211,7 @@ const registryUrl = safeHttpsUrl(registry?.url);
                       {pkg.first_provenant_at ? (
                         <span class="badge yes">With provenance</span>
                       ) : (
-                        <span class="badge neutral">Not yet</span>
+                        <span class="badge neutral">None observed</span>
                       )}
                     </td>
                   </tr>
