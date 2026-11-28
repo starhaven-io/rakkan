@@ -10,7 +10,7 @@ gem "hanami", "~> 3.0.2"
 gem "hanami-db", "~> 3.0.0"
 
 gem "dry-operation", ">= 1.0.1"
-gem "dry-types", "~> 1.7"
+gem "dry-types", "~> 1.9"
 gem "rake"
 gem "sqlite3"
 
